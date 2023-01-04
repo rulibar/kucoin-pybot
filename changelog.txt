@@ -1,0 +1,6 @@
+======== Recent changes ========
+==== Beta (v1.x) ====
+v1.1 (23-1-4)
+- Copied kucoin-pybot.py from binance-pybot/pybot.py
+- Copied config.txt from binance-pybot/config.txt
+- Initialized changelog.txt
