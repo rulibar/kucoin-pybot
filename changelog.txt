@@ -4,3 +4,7 @@ v1.1 (23-1-4)
 - Copied kucoin-pybot.py from binance-pybot/pybot.py
 - Copied config.txt from binance-pybot/config.txt
 - Initialized changelog.txt
+
+v1.1 (23-1-8)
+- Added Exchange class to handle API calls to KuCoin
+- Started routing all API calls through Exchange class

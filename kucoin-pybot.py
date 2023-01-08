@@ -1,5 +1,5 @@
 """
-Kucoin Pybot v1.1 (22-1-4)
+Kucoin Pybot v1.1 (22-1-8)
 https://github.com/rulibar/kucoin-pybot
 
 Warning: Not yet working.
@@ -14,25 +14,13 @@ import logging
 import talib
 
 # instance vars
-exchange = "kucoin"
-
-if exchange == "binance":
-    from binance.client import Client
-    api_key = ""
-    api_secret = ""
-    client = Client(api_key, api_secret)
-elif exchange == "kucoin":
-    from kucoin.client import Client
-    api_key = ""
-    api_secret = ""
-    api_passphrase = ""
-    client = Client(api_key, api_secret, api_passphrase)
-else:
-    print("Error: Unsupported exchange.")
-    exit()
-
+# if exchange has no api_passphrase then leave it empty
 asset = "ETH"; base = "BTC"
 interval_mins = 30
+exchange = "kucoin"
+api_key = ""
+api_secret = ""
+api_passphrase = ""
 
 # strategy vars
 storage = dict()
@@ -70,6 +58,88 @@ def shrink_list(list_in, size):
     if len(list_in) > size: return list_in[-size:]
     return list_in
 
+class Exchange:
+    def __init__(self, exchange, api):
+        self.name = str(exchange).lower()
+        api_key = api[0]
+        api_secret = api[1]
+        api_passphrase = api[2]
+
+        if self.name == "binance":
+            from binance.client import Client
+            self.client = Client(api_key, api_secret)
+        elif self.name == "kucoin":
+            from kucoin.client import Client
+            self.client = Client(api_key, api_secret, api_passphrase)
+        else: logger.error(f"Error: Unsupported exchange '{exchange}'."); exit()
+
+    def get_account(self):
+        if self.name == "binance":
+            data = self.client.get_account()["balances"]
+            return data
+        elif self.name == "kucoin":
+            logger.error(f"Error: Unsupported exchange '{exchange}'."); exit()
+
+    def get_deposit_history(self, start_time):
+        if self.name == "binance":
+            data = self.client.get_deposit_history(startTime = start_time)
+            return data
+        elif self.name == "kucoin":
+            logger.error(f"Error: Unsupported exchange '{exchange}'."); exit()
+
+    def get_withdrawal_history(self, start_time):
+        if self.name == "binance":
+            data = self.client.get_withdraw_history(startTime = start_time)
+            return data
+        elif self.name == "kucoin":
+            logger.error(f"Error: Unsupported exchange '{exchange}'."); exit()
+
+    def get_my_trades(self, pair, max_num):
+        if self.name == "binance":
+            data = reversed(self.client.get_my_trades(symbol = pair, limit = max_num))
+            return data
+        elif self.name == "kucoin":
+            logger.error(f"Error: Unsupported exchange '{exchange}'."); exit()
+
+    def get_symbol_info(self, pair):
+        if self.name == "binance":
+            data = self.client.get_symbol_info(pair)['filters']
+            return data
+        elif self.name == "kucoin":
+            logger.error(f"Error: Unsupported exchange '{exchange}'."); exit()
+
+    def get_historical_klines(self, symbol, interval, start_str):
+        if self.name == "binance":
+            data = self.client.get_historical_klines(symbol, interval, start_str)
+            return data
+        elif self.name == "kucoin":
+            logger.error(f"Error: Unsupported exchange '{exchange}'."); exit()
+
+    def order_limit_buy(self, pair, amt, pt):
+        if self.name == "binance":
+            self.client.order_limit_buy(symbol = pair, quantity = "{:.8f}".format(amt), price = "{:.8f}".format(pt))
+        elif self.name == "kucoin":
+            logger.error(f"Error: Unsupported exchange '{exchange}'."); exit()
+
+    def order_limit_sell(self, pair, amt, pt):
+        if self.name == "binance":
+            self.client.order_limit_sell(symbol = pair, quantity = "{:.8f}".format(amt), price = "{:.8f}".format(pt))
+        elif self.name == "kucoin":
+            logger.error(f"Error: Unsupported exchange '{exchange}'."); exit()
+
+    def get_open_orders(self, pair):
+        if self.name == "binance":
+            orders = self.client.get_open_orders(symbol = pair)
+            return orders
+        elif self.name == "kucoin":
+            logger.error(f"Error: Unsupported exchange '{exchange}'."); exit()
+
+    def cancel_order(self, pair, order_id):
+        if self.name == "binance":
+            self.client.cancel_order(symbol = pair, orderId = order_id)
+        elif self.name == "kucoin":
+            logger.error(f"Error: Unsupported exchange '{exchange}'."); exit()
+
 class Portfolio:
     def __init__(self, candle, positions, funds):
         self.ts = candle['ts_end']
@@ -88,7 +158,7 @@ class Instance:
     def __init__(self, asset, base, interval_mins):
         self.next_log = 0
         self.ticks = 0; self.days = 0; self.trades = 0
-        self.exchange = "binance"
+        self.exchange = exchange
         self.base = str(base)
         self.asset = str(asset)
         self.pair = self.asset + self.base
@@ -172,7 +242,8 @@ class Instance:
     def get_historical_candles_method(self, symbol, interval, start_str):
         data, err = list(), str()
         #try: data = client.get_historical_klines(symbol, interval, start_str)
-        try: print("Error: Not programmed."); exit()
+        #try: logger.error("Error: Not programmed."); exit()
+        try: data = client.get_historical_klines(symbol, interval, start_str)
         except Exception as e: err = e
         return data, err
 
@@ -209,7 +280,8 @@ class Instance:
             logger.warning("Trying to buy {} {} for {} {}. (price: {})".format(fix_dec(amt), self.asset, fix_dec(round(amt * pt, self.pt_dec)), self.base, fix_dec(pt)))
             self.last_order = {"type": "buy", "amt": amt, "pt": pt}
             #client.order_limit_buy(symbol = self.pair, quantity = "{:.8f}".format(amt), price = "{:.8f}".format(pt))
-            print("Error: Not programmed."); exit()
+            #logger.error("Error: Not programmed."); exit()
+            client.order_limit_buy(self.pair, amt, pt)
         except Exception as e:
             logger.error("Error buying.\n'{}'".format(e))
 
@@ -218,7 +290,8 @@ class Instance:
             logger.warning("Trying to sell {} {} for {} {}. (price: {})".format(fix_dec(amt), self.asset, fix_dec(round(amt * pt, self.pt_dec)), self.base, fix_dec(pt)))
             self.last_order = {"type": "sell", "amt": amt, "pt": pt}
             #client.order_limit_sell(symbol = self.pair, quantity = "{:.8f}".format(amt), price = "{:.8f}".format(pt))
-            print("Error: Not programmed."); exit()
+            #logger.error("Error: Not programmed."); exit()
+            client.order_limit_sell(self.pair, amt, pt)
         except Exception as e:
             logger.error("Error selling.\n'{}'".format(e))
 
@@ -254,10 +327,12 @@ class Instance:
         # close open orders
         try:
             #orders = client.get_open_orders(symbol = self.pair)
-            print("Error: Not programmed."); exit()
+            #logger.error("Error: Not programmed."); exit()
+            orders = client.get_open_orders(self.pair)
             for order in orders:
                 #client.cancel_order(symbol = self.pair, orderId = order['orderId'])
-                print("Error: Not programmed."); exit()
+                #logger.error("Error: Not programmed."); exit()
+                client.cancel_order(self.pair, order['orderId'])
         except Exception as e:
             logger.error("Error closing open orders.\n'{}'".format(e))
 
@@ -267,7 +342,8 @@ class Instance:
         self.days = (self.ticks - 1) * self.interval / (60 * 24)
 
         #try: data = client.get_symbol_info(self.pair)['filters']
-        try: print("Error: Not programmed."); exit()
+        #try: logger.error("Error: Not programmed."); exit()
+        try: data = client.get_symbol_info(self.pair)
         except Exception as e:
             logger.error("Error getting symbol info.\n'{}'".format(e))
             return
@@ -385,7 +461,8 @@ class Instance:
     def get_positions(self):
         positions = {"asset": [self.asset, 0], "base": [self.base, 0]}
         #try: data = client.get_account()["balances"]
-        try: print("Error: Not programmed."); exit()
+        #try: logger.error("Error: Not programmed."); exit()
+        try: data = client.get_account()
         except Exception as e:
             logger.error("Error getting account balances.\n'{}'".format(e))
             return self.positions
@@ -465,7 +542,9 @@ class Instance:
         try:
             #deposits = client.get_deposit_history(startTime = start_time)
             #withdrawals = client.get_withdraw_history(startTime = start_time)
-            print("Error: Not programmed."); exit()
+            #logger.error("Error: Not programmed."); exit()
+            deposits = client.get_deposit_history(start_time)
+            withdrawals = client.get_withdrawal_history(start_time)
 
             # deal with differing formats
             if type(deposits) is dict:
@@ -556,7 +635,8 @@ class Instance:
 
         # Get trades
         #try: trades = reversed(client.get_my_trades(symbol = self.pair, limit = 20))
-        try: print("Error: Not programmed."); exit()
+        #try: logger.error("Error: Not programmed."); exit()
+        try: trades = client.get_my_trades(self.pair, 20)
         except Exception as e:
             logger.error("Error getting trade info.\n'{}'".format(e))
             return 0, 0, p.price
@@ -795,6 +875,8 @@ class Instance:
             self.strat(p)
             self.bso(p)
 
+api = [api_key, api_secret, api_passphrase]
+client = Exchange(exchange, api)
 ins = Instance(asset, base, interval_mins)
 while True:
     ins.ping()
