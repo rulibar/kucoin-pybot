@@ -1,2 +1,2 @@
 # kucoin-pybot
-A trading bot for Binance exchange using Python3 and packages python-binance and TA-Lib.
+A trading bot for KuCoin exchange using Python3 and packages python-kucoin and TA-Lib.
