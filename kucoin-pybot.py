@@ -1,5 +1,5 @@
 """
-Kucoin Pybot v1.1 (22-1-8)
+Kucoin Pybot v1.1 (22-1-9)
 https://github.com/rulibar/kucoin-pybot
 
 Warning: Not yet working.
@@ -101,16 +101,16 @@ class Exchange:
         elif self.name == "kucoin":
             logger.error(f"Error: Unsupported exchange '{exchange}'."); exit()
 
-    def get_symbol_info(self, pair):
+    def get_pair_info(self, pair):
         if self.name == "binance":
             data = self.client.get_symbol_info(pair)['filters']
             return data
         elif self.name == "kucoin":
             logger.error(f"Error: Unsupported exchange '{exchange}'."); exit()
 
-    def get_historical_klines(self, symbol, interval, start_str):
+    def get_historical_klines(self, pair, interval, start_str):
         if self.name == "binance":
-            data = self.client.get_historical_klines(symbol, interval, start_str)
+            data = self.client.get_historical_klines(pair, interval, start_str)
             return data
         elif self.name == "kucoin":
             logger.error(f"Error: Unsupported exchange '{exchange}'."); exit()
@@ -129,8 +129,8 @@ class Exchange:
 
     def get_open_orders(self, pair):
         if self.name == "binance":
-            orders = self.client.get_open_orders(symbol = pair)
-            return orders
+            data = self.client.get_open_orders(symbol = pair)
+            return data
         elif self.name == "kucoin":
             logger.error(f"Error: Unsupported exchange '{exchange}'."); exit()
 
@@ -239,18 +239,18 @@ class Instance:
 
         return raw_unused
 
-    def get_historical_candles_method(self, symbol, interval, start_str):
+    def get_historical_candles_method(self, pair, interval, start_str):
         data, err = list(), str()
         #try: data = client.get_historical_klines(symbol, interval, start_str)
         #try: logger.error("Error: Not programmed."); exit()
-        try: data = client.get_historical_klines(symbol, interval, start_str)
+        try: data = client.get_historical_klines(pair, interval, start_str)
         except Exception as e: err = e
         return data, err
 
-    def get_historical_candles(self, symbol, interval, n_candles):
+    def get_historical_candles(self, pair, interval, n_candles):
         tries = 0
         while True:
-            data, err = self.get_historical_candles_method(symbol, interval, "{} minutes ago UTC".format(n_candles))
+            data, err = self.get_historical_candles_method(pair, interval, "{} minutes ago UTC".format(n_candles))
             tries += 1
             if len(data) == 0:
                 if tries <= 3:
@@ -343,9 +343,9 @@ class Instance:
 
         #try: data = client.get_symbol_info(self.pair)['filters']
         #try: logger.error("Error: Not programmed."); exit()
-        try: data = client.get_symbol_info(self.pair)
+        try: data = client.get_pair_info(self.pair)
         except Exception as e:
-            logger.error("Error getting symbol info.\n'{}'".format(e))
+            logger.error("Error getting pair info.\n'{}'".format(e))
             return
         min_order = float(data[2]['minQty']) * self.candles[-1]['close']
         self.min_order = 3 * max(min_order, float(data[3]['minNotional']))
