@@ -1,5 +1,5 @@
 """
-Kucoin Pybot v1.1 (22-1-9)
+Kucoin Pybot v1.1 (23-1-11)
 https://github.com/rulibar/kucoin-pybot
 
 Warning: Not yet working.
@@ -73,12 +73,31 @@ class Exchange:
             self.client = Client(api_key, api_secret, api_passphrase)
         else: logger.error(f"Error: Unsupported exchange '{exchange}'."); exit()
 
-    def get_account(self):
+        self.tickers = dict()
+        if self.name == "kucoin":
+            currencies = self.client.get_currencies()
+            for i in range(len(currencies)):
+                coin_name = currencies[i]['currency']
+                coin_ticker = currencies[i]['name']
+                self.tickers[coin_name] = coin_ticker
+
+    def get_account(self, asset, base):
+        data = {"asset": [asset, 0], "base": [base, 0]}
+
         if self.name == "binance":
-            data = self.client.get_account()["balances"]
-            return data
+            acc = self.client.get_account()["balances"]
+            for i in range(len(acc)):
+                acc_asset = acc[i]["asset"]
+                if acc_asset not in {asset, base}: continue
+                free = float(acc[i]["free"])
+                locked = float(acc[i]["locked"])
+                total = free + locked
+                if acc_asset == asset: data['asset'][1] = total
+                if acc_asset == base: data['base'][1] = total
         elif self.name == "kucoin":
             logger.error(f"Error: Unsupported exchange '{exchange}'."); exit()
+
+        return data
 
     def get_deposit_history(self, start_time):
         if self.name == "binance":
@@ -459,21 +478,10 @@ class Instance:
                 self.candles = shrink_list(self.candles, 5000)
 
     def get_positions(self):
-        positions = {"asset": [self.asset, 0], "base": [self.base, 0]}
-        #try: data = client.get_account()["balances"]
-        #try: logger.error("Error: Not programmed."); exit()
-        try: data = client.get_account()
+        try: positions = client.get_account(self.asset, self.base)
         except Exception as e:
             logger.error("Error getting account balances.\n'{}'".format(e))
             return self.positions
-        for i in range(len(data)):
-            asset = data[i]["asset"]
-            if asset not in {self.asset, self.base}: continue
-            free = float(data[i]["free"])
-            locked = float(data[i]["locked"])
-            total = free + locked
-            if asset == self.asset: positions['asset'][1] = total
-            if asset == self.base: positions['base'][1] = total
 
         if self.ticks == 0:
             self.positions_init_ts = int(1000 * time.time())
