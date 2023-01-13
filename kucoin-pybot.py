@@ -1,5 +1,5 @@
 """
-Kucoin Pybot v1.1 (23-1-11)
+Kucoin Pybot v1.1 (23-1-13)
 https://github.com/rulibar/kucoin-pybot
 
 Warning: Not yet working.
@@ -99,21 +99,16 @@ class Exchange:
 
         return data
 
-    def get_deposit_history(self, start_time):
+    def get_dws(self, start_time):
         if self.name == "binance":
-            data = self.client.get_deposit_history(startTime = start_time)
+            data = list()
+            data.append(self.client.get_deposit_history(startTime = start_time))
+            data.append(self.client.get_withdraw_history(startTime = start_time))
             return data
         elif self.name == "kucoin":
             logger.error(f"Error: Unsupported exchange '{exchange}'."); exit()
 
-    def get_withdrawal_history(self, start_time):
-        if self.name == "binance":
-            data = self.client.get_withdraw_history(startTime = start_time)
-            return data
-        elif self.name == "kucoin":
-            logger.error(f"Error: Unsupported exchange '{exchange}'."); exit()
-
-    def get_my_trades(self, pair, max_num):
+    def get_trades(self, pair, max_num):
         if self.name == "binance":
             data = reversed(self.client.get_my_trades(symbol = pair, limit = max_num))
             return data
@@ -521,12 +516,14 @@ class Instance:
         pos_f['base'][1] = base_f; pos_t['base'][1] = base_t
         pos_f['asset'][1] = asset_f; pos_t['asset'][1] = asset_t
 
-    def get_dws(self):
+    def process_dws(self):
         diffasset_dw = 0; diffbase_dw = 0
         ts_last = self.candles[-2]['ts_end']
         if len(self.deposits_pending) == 0 and len(self.withdrawals_pending) == 0: self.earliest_pending = ts_last
         start_time = self.earliest_pending - 1000
         if self.ticks == 1: start_time = self.earliest_pending - 1000 * 60 * 60 * 24 * 7
+
+        #deposits, withdrawals = client.get_dws(start_time)
 
         def process_d(deposit):
             amt = deposit['amount']
@@ -551,8 +548,7 @@ class Instance:
             #deposits = client.get_deposit_history(startTime = start_time)
             #withdrawals = client.get_withdraw_history(startTime = start_time)
             #logger.error("Error: Not programmed."); exit()
-            deposits = client.get_deposit_history(start_time)
-            withdrawals = client.get_withdrawal_history(start_time)
+            deposits, withdrawals = client.get_dws(start_time)
 
             # deal with differing formats
             if type(deposits) is dict:
@@ -633,22 +629,24 @@ class Instance:
 
         return diffasset_dw, diffbase_dw
 
-    def get_trades(self, p):
+    def process_trades(self, p):
         diffasset_trad = 0; diffbase_trad = 0
         ts_last = self.candles[-2]['ts_end']
+        start_time = int(ts_last)
         l = self.last_order
         s = self.signal
-        limit = int(ts_last)
-        if self.ticks == 1: limit = self.positions_init_ts
+        if self.ticks == 1: start_time = self.positions_init_ts
+
+        #trades = client.get_trades(start_time)
 
         # Get trades
         #try: trades = reversed(client.get_my_trades(symbol = self.pair, limit = 20))
         #try: logger.error("Error: Not programmed."); exit()
-        try: trades = client.get_my_trades(self.pair, 20)
+        try: trades = client.get_trades(self.pair, 20)
         except Exception as e:
             logger.error("Error getting trade info.\n'{}'".format(e))
             return 0, 0, p.price
-        trades = [t for t in trades if t['time'] > limit]
+        trades = [t for t in trades if t['time'] > start_time]
 
         # process trades
         if len(trades) > 0:
@@ -691,15 +689,15 @@ class Instance:
 
         return diffasset_trad, diffbase_trad, apc
 
-    def get_dwts(self, p):
+    def process_dwts(self, p):
         # get deposits, withdrawals, and trades
         s = self.signal
         diffasset = round(self.positions['asset'][1] - self.positions_last['asset'][1], 8)
         diffbase = round(self.positions['base'][1] - self.positions_last['base'][1], 8)
 
         # get dws and trades
-        diffasset_dw, diffbase_dw = self.get_dws()
-        diffasset_trad, diffbase_trad, apc = self.get_trades(p)
+        diffasset_dw, diffbase_dw = self.process_dws()
+        diffasset_trad, diffbase_trad, apc = self.process_trades(p)
 
         # get unknown changes
         diffasset_expt = round(diffasset_dw + diffasset_trad, 8)
@@ -787,8 +785,8 @@ class Instance:
         logger.info("Buy and hold: {}%".format(round(100 * r['bh'], 2)))
 
     def init(self, p):
-        # Binance Pybot 20/100 SXS
-        self.bot_name = "Binance Pybot"
+        # KuCoin Pybot 20/100 SXS
+        self.bot_name = "KuCoin Pybot"
         self.version = "1.1"
         logger.info("Analyzing the market...")
 
@@ -870,7 +868,7 @@ class Instance:
             self.positions_last = {key: value[:] for key, value in self.positions.items()}
             self.positions = self.get_positions()
             p = Portfolio(self.candles[-1], self.positions, float(self.params['funds']))
-            self.get_dwts(p)
+            self.process_dwts(p)
             self.get_performance(p)
 
             # Log output
