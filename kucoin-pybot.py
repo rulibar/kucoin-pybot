@@ -73,6 +73,12 @@ class Exchange:
             self.client = Client(api_key, api_secret, api_passphrase)
         else: logger.error(f"Error: Unsupported exchange '{exchange}'."); exit()
 
+        # Binance vars
+        self.deposits_pending = set()
+        self.withdrawals_pending = set()
+        self.earliest_pending = 0
+
+        # KuCoin vars
         self.tickers = dict()
         if self.name == "kucoin":
             currencies = self.client.get_currencies()
@@ -99,14 +105,82 @@ class Exchange:
 
         return data
 
-    def get_dws(self, start_time):
+    def get_dws(self, asset, base, ts_last):
+        data = list()
+
         if self.name == "binance":
-            data = list()
-            data.append(self.client.get_deposit_history(startTime = start_time))
-            data.append(self.client.get_withdraw_history(startTime = start_time))
-            return data
+            first_tick = ins.ticks == 1
+            if len(self.deposits_pending) == 0 and len(self.withdrawals_pending) == 0: self.earliest_pending = ts_last
+            start_time = self.earliest_pending - 1000
+            if first_tick: start_time = self.earliest_pending - 7*24*60*60*1000
+
+            deposits = self.client.get_deposit_history(startTime = start_time)
+            withdrawals = self.client.get_withdraw_history(startTime = start_time)
+
+            # deal with differing formats
+            if type(deposits) is dict:
+                deposits = deposits['depositList']
+
+            if type(withdrawals) is dict:
+                withdrawals = withdrawals['withdrawList']
+
+            for deposit in deposits:
+                if 'asset' not in deposit:
+                    deposit['asset'] = str(deposit['coin'])
+                    deposit['creator'] = ''
+                    deposit['amount'] = float(deposit['amount'])
+
+            for withdrawal in withdrawals:
+                if 'asset' not in withdrawal:
+                    withdrawal['asset'] = str(withdrawal['coin'])
+                    withdrawal['withdrawOrderId'] = ''
+                    withdrawal['amount'] = float(withdrawal['amount'])
+                    withdrawal['transactionFee'] = float(withdrawal['transactionFee'])
+
+                if type(withdrawal['applyTime']) is str:
+                    applyTime = time.strptime(withdrawal['applyTime'], '%Y-%m-%d %H:%M:%S')
+                    applyTime = 1000 * timegm(applyTime)
+                    withdrawal['applyTime'] = int(applyTime)
+
+            deposits = [d for d in deposits if d['asset'] in {asset, base}]
+            withdrawals = [w for w in withdrawals if w['asset'] in {asset, base}]
+
+            d_complete = list()
+            w_complete = list()
+
+            # add new pending trades to pending set
+            # check for and process old pending trades that were filled
+            for deposit in deposits:
+                id = deposit['txId']
+                if deposit['status'] < 1:
+                    self.deposits_pending.add(id)
+                    self.earliest_pending = start_time
+                    continue
+                if id not in self.deposits_pending:
+                    if not first_tick and deposit['insertTime'] > ts_last:
+                        d_complete.append(deposit)
+                    continue
+                d_complete.append(deposit)
+                self.deposits_pending.remove(id)
+            for withdrawal in withdrawals:
+                id = withdrawal['id']
+                if withdrawal['status'] < 0:
+                    self.withdrawals_pending.add(id)
+                    self.earliest_pending = start_time
+                    continue
+                if id not in self.withdrawals_pending:
+                    if not first_tick and withdrawal['applyTime'] > ts_last:
+                        w_complete.append(withdrawal)
+                    continue
+                w_complete.append(withdrawal)
+                self.withdrawals_pending.remove(id)
+
+            data.append(d_complete)
+            data.append(w_complete)
         elif self.name == "kucoin":
             logger.error(f"Error: Unsupported exchange '{exchange}'."); exit()
+
+        return data
 
     def get_trades(self, pair, max_num):
         if self.name == "binance":
@@ -184,10 +258,6 @@ class Instance:
         self.candles = self._get_candles()
         self.candles_raw = shrink_list(self.candles_raw, 2 * self.interval)
         self.candles_raw_unused = self._get_raw_unused()
-
-        self.deposits_pending = set()
-        self.withdrawals_pending = set()
-        self.earliest_pending = 0
 
         self.candle_start = None
         self.positions_start = None
@@ -480,7 +550,7 @@ class Instance:
 
         if self.ticks == 0:
             self.positions_init_ts = int(1000 * time.time())
-            self.earliest_pending = int(self.positions_init_ts)
+            client.earliest_pending = int(self.positions_init_ts)
 
         return positions
 
@@ -519,113 +589,31 @@ class Instance:
     def process_dws(self):
         diffasset_dw = 0; diffbase_dw = 0
         ts_last = self.candles[-2]['ts_end']
-        if len(self.deposits_pending) == 0 and len(self.withdrawals_pending) == 0: self.earliest_pending = ts_last
-        start_time = self.earliest_pending - 1000
-        if self.ticks == 1: start_time = self.earliest_pending - 1000 * 60 * 60 * 24 * 7
 
-        #deposits, withdrawals = client.get_dws(start_time)
-
-        def process_d(deposit):
-            amt = deposit['amount']
-            diffasset = 0; diffbase = 0
-            if self.params['log_dws'] == "yes":
-                logger.warning("Deposit of {} {} detected.".format(fix_dec(amt), deposit['asset']))
-            if deposit['asset'] == self.base: diffbase += amt
-            else: diffasset += amt
-            return diffasset, diffbase
-
-        def process_w(withdrawal):
-            amt = withdrawal['amount'] + withdrawal['transactionFee']
-            diffasset = 0; diffbase = 0
-            if self.params['log_dws'] == "yes":
-                logger.warning("Withdrawal of {} {} detected.".format(fix_dec(amt), withdrawal['asset']))
-            if withdrawal['asset'] == self.base: diffbase -= amt
-            else: diffasset -= amt
-            return diffasset, diffbase
-
-        # get dws
         try:
-            #deposits = client.get_deposit_history(startTime = start_time)
-            #withdrawals = client.get_withdraw_history(startTime = start_time)
-            #logger.error("Error: Not programmed."); exit()
-            deposits, withdrawals = client.get_dws(start_time)
-
-            # deal with differing formats
-            if type(deposits) is dict:
-                deposits = deposits['depositList']
-
-            if type(withdrawals) is dict:
-                withdrawals = withdrawals['withdrawList']
-
-            for deposit in deposits:
-                if 'asset' not in deposit:
-                    deposit['asset'] = str(deposit['coin'])
-                    deposit['creator'] = ''
-                    deposit['amount'] = float(deposit['amount'])
-
-            for withdrawal in withdrawals:
-                if 'asset' not in withdrawal:
-                    withdrawal['asset'] = str(withdrawal['coin'])
-                    withdrawal['withdrawOrderId'] = ''
-                    withdrawal['amount'] = float(withdrawal['amount'])
-                    withdrawal['transactionFee'] = float(withdrawal['transactionFee'])
-
-                if type(withdrawal['applyTime']) is str:
-                    applyTime = time.strptime(withdrawal['applyTime'], '%Y-%m-%d %H:%M:%S')
-                    applyTime = 1000 * timegm(applyTime)
-                    withdrawal['applyTime'] = int(applyTime)
+            deposits, withdrawals = client.get_dws(self.asset, self.base, ts_last)
         except Exception as e:
             logger.error("Error getting deposits and withdrawals.\n'{}'".format(e))
             return 0, 0
-        deposits = [d for d in deposits if d['asset'] in {self.asset, self.base}]
-        withdrawals = [w for w in withdrawals if w['asset'] in {self.asset, self.base}]
-
-        # add new pending trades to pending set
-        # check for and process old pending trades that were filled
-        for deposit in deposits:
-            id = deposit['txId']
-            if deposit['status'] < 1:
-                self.deposits_pending.add(id)
-                self.earliest_pending = start_time
-                continue
-            if id not in self.deposits_pending: continue
-            if deposit['status'] > 0:
-                diffasset, diffbase = process_d(deposit)
-                diffasset_dw += diffasset
-                diffbase_dw += diffbase
-                self.deposits_pending.remove(id)
-        for withdrawal in withdrawals:
-            id = withdrawal['id']
-            if withdrawal['status'] < 0:
-                self.withdrawals_pending.add(id)
-                self.earliest_pending = start_time
-                continue
-            if id not in self.withdrawals_pending: continue
-            if withdrawal['status'] > -1:
-                diffasset, diffbase = process_w(withdrawal)
-                diffasset_dw += diffasset
-                diffbase_dw += diffbase
-                self.withdrawals_pending.remove(id)
-
-        # skip the last section if it's the first tick
-        if self.ticks == 1: return diffasset_dw, diffbase_dw
-
-        # process dws received and completed in the last candle
-        deposits = [d for d in deposits if d['insertTime'] > ts_last]
-        deposits = [d for d in deposits if d['status'] > 0]
-        withdrawals = [w for w in withdrawals if w['applyTime'] > ts_last]
-        withdrawals = [w for w in withdrawals if w['status'] > -1]
 
         for deposit in deposits:
-            id = deposit['txId']
-            diffasset, diffbase = process_d(deposit)
-            diffasset_dw += diffasset
-            diffbase_dw += diffbase
+            diffasset = 0; diffbase = 0
+            asset = deposit['asset']
+            amt = deposit['amount']
+            if self.params['log_dws'] == "yes":
+                logger.warning("Deposit of {} {} detected.".format(fix_dec(amt), asset))
+            if asset == self.base: diffbase += amt
+            else: diffasset += amt
+            diffasset_dw += diffasset; diffbase_dw += diffbase
         for withdrawal in withdrawals:
-            id = withdrawal['id']
-            diffasset, diffbase = process_w(withdrawal)
-            diffasset_dw += diffasset
-            diffbase_dw += diffbase
+            diffasset = 0; diffbase = 0
+            asset = withdrawal['asset']
+            amt = withdrawal['amount'] + withdrawal['transactionFee']
+            if self.params['log_dws'] == "yes":
+                logger.warning("Withdrawal of {} {} detected.".format(fix_dec(amt), asset))
+            if asset == self.base: diffbase -= amt
+            else: diffasset -= amt
+            diffasset_dw += diffasset; diffbase_dw += diffbase
 
         return diffasset_dw, diffbase_dw
 
