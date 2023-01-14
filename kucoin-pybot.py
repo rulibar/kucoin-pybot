@@ -632,19 +632,14 @@ class Instance:
         ts_last = self.candles[-2]['ts_end']
         l = self.last_order
         s = self.signal
-        #start_time = int(ts_last)
-        #if self.ticks == 1: start_time = self.positions_init_ts
 
         #trades = client.get_trades(start_time)
 
         # Get trades
-        #try: trades = reversed(client.get_my_trades(symbol = self.pair, limit = 20))
-        #try: logger.error("Error: Not programmed."); exit()
         try: trades = client.get_trades(self.pair, 20, ts_last)
         except Exception as e:
             logger.error("Error getting trade info.\n'{}'".format(e))
             return 0, 0, p.price
-        #trades = [t for t in trades if t['time'] > start_time]
 
         # process trades
         if len(trades) > 0:
