@@ -73,6 +73,10 @@ class Exchange:
             self.client = Client(api_key, api_secret, api_passphrase)
         else: logger.error(f"Error: Unsupported exchange '{exchange}'."); exit()
 
+        # Exchange vars
+        self.first_tick = True
+        self.positions_init_ts = 0
+
         # Binance vars
         self.deposits_pending = set()
         self.withdrawals_pending = set()
@@ -89,6 +93,10 @@ class Exchange:
 
     def get_account(self, asset, base):
         data = {"asset": [asset, 0], "base": [base, 0]}
+
+        if self.positions_init_ts == 0:
+            self.positions_init_ts = int(1000 * time.time())
+            self.earliest_pending = int(self.positions_init_ts)
 
         if self.name == "binance":
             acc = self.client.get_account()["balances"]
@@ -109,10 +117,9 @@ class Exchange:
         data = list()
 
         if self.name == "binance":
-            first_tick = ins.ticks == 1
             if len(self.deposits_pending) == 0 and len(self.withdrawals_pending) == 0: self.earliest_pending = ts_last
             start_time = self.earliest_pending - 1000
-            if first_tick: start_time = self.earliest_pending - 7*24*60*60*1000
+            if self.first_tick: start_time = self.earliest_pending - 7*24*60*60*1000
 
             deposits = self.client.get_deposit_history(startTime = start_time)
             withdrawals = self.client.get_withdraw_history(startTime = start_time)
@@ -157,7 +164,7 @@ class Exchange:
                     self.earliest_pending = start_time
                     continue
                 if id not in self.deposits_pending:
-                    if not first_tick and deposit['insertTime'] > ts_last:
+                    if not self.first_tick and deposit['insertTime'] > ts_last:
                         d_complete.append(deposit)
                     continue
                 d_complete.append(deposit)
@@ -169,7 +176,7 @@ class Exchange:
                     self.earliest_pending = start_time
                     continue
                 if id not in self.withdrawals_pending:
-                    if not first_tick and withdrawal['applyTime'] > ts_last:
+                    if not self.first_tick and withdrawal['applyTime'] > ts_last:
                         w_complete.append(withdrawal)
                     continue
                 w_complete.append(withdrawal)
@@ -182,12 +189,19 @@ class Exchange:
 
         return data
 
-    def get_trades(self, pair, max_num):
+    def get_trades(self, pair, max_num, ts_last):
+        data = list()
+
+        start_time = int(ts_last)
+        if self.first_tick: start_time = self.positions_init_ts
+
         if self.name == "binance":
             data = reversed(self.client.get_my_trades(symbol = pair, limit = max_num))
-            return data
+            data = [dat for dat in data if dat['time'] > start_time]
         elif self.name == "kucoin":
             logger.error(f"Error: Unsupported exchange '{exchange}'."); exit()
+
+        return data
 
     def get_pair_info(self, pair):
         if self.name == "binance":
@@ -261,7 +275,6 @@ class Instance:
 
         self.candle_start = None
         self.positions_start = None
-        self.positions_init_ts = 0
         self.positions = self.get_positions()
         self.positions_f = {'asset': list(self.positions['asset'])}
         self.positions_f['base'] = list(self.positions['base'])
@@ -423,6 +436,7 @@ class Instance:
     def update_vars(self):
         # Get preliminary vars
         self.ticks += 1
+        if self.ticks == 2: client.first_tick = False
         self.days = (self.ticks - 1) * self.interval / (60 * 24)
 
         #try: data = client.get_symbol_info(self.pair)['filters']
@@ -548,10 +562,6 @@ class Instance:
             logger.error("Error getting account balances.\n'{}'".format(e))
             return self.positions
 
-        if self.ticks == 0:
-            self.positions_init_ts = int(1000 * time.time())
-            client.earliest_pending = int(self.positions_init_ts)
-
         return positions
 
     def update_f(self, p, apc):
@@ -620,27 +630,27 @@ class Instance:
     def process_trades(self, p):
         diffasset_trad = 0; diffbase_trad = 0
         ts_last = self.candles[-2]['ts_end']
-        start_time = int(ts_last)
         l = self.last_order
         s = self.signal
-        if self.ticks == 1: start_time = self.positions_init_ts
+        #start_time = int(ts_last)
+        #if self.ticks == 1: start_time = self.positions_init_ts
 
         #trades = client.get_trades(start_time)
 
         # Get trades
         #try: trades = reversed(client.get_my_trades(symbol = self.pair, limit = 20))
         #try: logger.error("Error: Not programmed."); exit()
-        try: trades = client.get_trades(self.pair, 20)
+        try: trades = client.get_trades(self.pair, 20, ts_last)
         except Exception as e:
             logger.error("Error getting trade info.\n'{}'".format(e))
             return 0, 0, p.price
-        trades = [t for t in trades if t['time'] > start_time]
+        #trades = [t for t in trades if t['time'] > start_time]
 
         # process trades
         if len(trades) > 0:
-            str_out = "{} new trade(s) found.".format(len(trades))
+            #str_out = "{} new trade(s) found.".format(len(trades))
             for trade in trades:
-                str_out += "\n    {}".format(trade)
+                #str_out += "\n    {}".format(trade)
                 qty = float(trade['qty'])
                 price = float(trade['price'])
                 if not trade['isBuyer']: qty *= -1
