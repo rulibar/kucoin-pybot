@@ -196,24 +196,43 @@ class Exchange:
         if self.first_tick: start_time = self.positions_init_ts
 
         if self.name == "binance":
-            data = reversed(self.client.get_my_trades(symbol = pair, limit = max_num))
-            data = [dat for dat in data if dat['time'] > start_time]
+            trades = reversed(self.client.get_my_trades(symbol = pair, limit = max_num))
+            data = [tr for tr in trades if tr['time'] > start_time]
         elif self.name == "kucoin":
             logger.error(f"Error: Unsupported exchange '{exchange}'."); exit()
 
         return data
 
     def get_pair_info(self, pair):
+        data = list()
+
         if self.name == "binance":
-            data = self.client.get_symbol_info(pair)['filters']
-            return data
+            pair_info = self.client.get_symbol_info(pair)['filters']
+            data = pair_info
         elif self.name == "kucoin":
             logger.error(f"Error: Unsupported exchange '{exchange}'."); exit()
+
+        return data
 
     def get_historical_klines(self, pair, interval, start_str):
         if self.name == "binance":
             data = self.client.get_historical_klines(pair, interval, start_str)
-            return data
+        elif self.name == "kucoin":
+            logger.error(f"Error: Unsupported exchange '{exchange}'."); exit()
+
+        return data
+
+    def get_open_orders(self, pair):
+        if self.name == "binance":
+            data = self.client.get_open_orders(symbol = pair)
+        elif self.name == "kucoin":
+            logger.error(f"Error: Unsupported exchange '{exchange}'."); exit()
+
+        return data
+
+    def cancel_order(self, pair, order_id):
+        if self.name == "binance":
+            self.client.cancel_order(symbol = pair, orderId = order_id)
         elif self.name == "kucoin":
             logger.error(f"Error: Unsupported exchange '{exchange}'."); exit()
 
@@ -226,19 +245,6 @@ class Exchange:
     def order_limit_sell(self, pair, amt, pt):
         if self.name == "binance":
             self.client.order_limit_sell(symbol = pair, quantity = "{:.8f}".format(amt), price = "{:.8f}".format(pt))
-        elif self.name == "kucoin":
-            logger.error(f"Error: Unsupported exchange '{exchange}'."); exit()
-
-    def get_open_orders(self, pair):
-        if self.name == "binance":
-            data = self.client.get_open_orders(symbol = pair)
-            return data
-        elif self.name == "kucoin":
-            logger.error(f"Error: Unsupported exchange '{exchange}'."); exit()
-
-    def cancel_order(self, pair, order_id):
-        if self.name == "binance":
-            self.client.cancel_order(symbol = pair, orderId = order_id)
         elif self.name == "kucoin":
             logger.error(f"Error: Unsupported exchange '{exchange}'."); exit()
 
@@ -436,24 +442,23 @@ class Instance:
     def update_vars(self):
         # Get preliminary vars
         self.ticks += 1
-        if self.ticks == 2: client.first_tick = False
         self.days = (self.ticks - 1) * self.interval / (60 * 24)
+        if self.ticks == 2: client.first_tick = False
 
-        #try: data = client.get_symbol_info(self.pair)['filters']
-        #try: logger.error("Error: Not programmed."); exit()
-        try: data = client.get_pair_info(self.pair)
+        try: pair_info = client.get_pair_info(self.pair)
         except Exception as e:
             logger.error("Error getting pair info.\n'{}'".format(e))
             return
-        min_order = float(data[2]['minQty']) * self.candles[-1]['close']
-        self.min_order = 3 * max(min_order, float(data[3]['minNotional']))
+
+        min_order = float(pair_info[2]['minQty']) * self.candles[-1]['close']
+        self.min_order = 3 * max(min_order, float(pair_info[3]['minNotional']))
         amt_dec = 8
-        for char in reversed(data[2]['stepSize']):
+        for char in reversed(pair_info[2]['stepSize']):
             if char == "0": amt_dec -= 1
             else: break
         self.amt_dec = amt_dec
         pt_dec = 8
-        for char in reversed(data[0]['tickSize']):
+        for char in reversed(pair_info[0]['tickSize']):
             if char == "0": pt_dec -= 1
             else: break
         self.pt_dec = pt_dec
@@ -632,8 +637,6 @@ class Instance:
         ts_last = self.candles[-2]['ts_end']
         l = self.last_order
         s = self.signal
-
-        #trades = client.get_trades(start_time)
 
         # Get trades
         try: trades = client.get_trades(self.pair, 20, ts_last)
