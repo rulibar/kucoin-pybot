@@ -1,5 +1,5 @@
 """
-Kucoin Pybot v1.1 (23-1-13)
+Kucoin Pybot v1.1 (23-1-15)
 https://github.com/rulibar/kucoin-pybot
 
 Warning: Not yet working.
@@ -92,7 +92,7 @@ class Exchange:
                 self.tickers[coin_name] = coin_ticker
 
     def get_account(self, asset, base):
-        data = {"asset": [asset, 0], "base": [base, 0]}
+        data = {"asset": [asset, 0.0], "base": [base, 0.0]}
 
         if self.positions_init_ts == 0:
             self.positions_init_ts = int(1000 * time.time())
@@ -119,7 +119,7 @@ class Exchange:
         if self.name == "binance":
             if len(self.deposits_pending) == 0 and len(self.withdrawals_pending) == 0: self.earliest_pending = ts_last
             start_time = self.earliest_pending - 1000
-            if self.first_tick: start_time = self.earliest_pending - 7*24*60*60*1000
+            if self.first_tick: start_time = self.earliest_pending - 7 * 24 * 60 * 60 * 1000
 
             deposits = self.client.get_deposit_history(startTime = start_time)
             withdrawals = self.client.get_withdraw_history(startTime = start_time)
@@ -204,11 +204,14 @@ class Exchange:
         return data
 
     def get_pair_info(self, pair):
-        data = list()
+        data = dict()
 
         if self.name == "binance":
             pair_info = self.client.get_symbol_info(pair)['filters']
-            data = list(pair_info)
+            data['asset_min_qty'] = pair_info[2]['minQty']
+            data['base_min_qty'] = pair_info[3]['minNotional']
+            data['asset_precision'] = pair_info[2]['stepSize']
+            data['price_precision'] = pair_info[0]['tickSize']
         elif self.name == "kucoin":
             logger.error(f"Error: Unsupported exchange '{exchange}'."); exit()
 
@@ -309,7 +312,7 @@ class Instance:
 
     def _get_candles_raw(self):
         # get enough 1m candles to create 600 historical candles
-        candles_raw = self.get_historical_candles(self.pair, "1m", 600*self.interval)
+        candles_raw = self.get_historical_candles(self.pair, "1m", 600 * self.interval)
         candles_raw.pop()
         return candles_raw
 
@@ -320,7 +323,7 @@ class Instance:
         for i in range(self.interval-2): candles_raw_clone.pop()
         for i in range(len(candles_raw_clone)):
             order = i % self.interval
-            candle_raw = candles_raw_clone[-1-i]
+            candle_raw = candles_raw_clone[-1 - i]
 
             if order == 0:
                 candle_new = candle_raw
@@ -332,7 +335,7 @@ class Instance:
                 candle_new["low"] = candle_raw["low"]
             candle_new["volume"] += candle_raw["volume"]
 
-            if order == self.interval-1:
+            if order == self.interval - 1:
                 candle_new["open"] = candle_raw["open"]
                 candle_new["ts_start"] = candle_raw["ts_start"]
                 candles.append(candle_new)
@@ -343,7 +346,7 @@ class Instance:
         # get unused historical 1m candles
         raw_unused = -1
         #str_out = str()
-        candles_raw = self.candles_raw[-2*self.interval:]
+        candles_raw = self.candles_raw[-2 * self.interval:]
         for i in range(len(candles_raw)):
             candle_raw = candles_raw[i]
             if candle_raw["ts_end"] == self.candles[-1]["ts_end"]: raw_unused += 1
@@ -434,15 +437,15 @@ class Instance:
             logger.error("Error getting pair info.\n'{}'".format(e))
             return
 
-        min_order = float(pair_info[2]['minQty']) * self.candles[-1]['close']
-        self.min_order = 3 * max(min_order, float(pair_info[3]['minNotional']))
-        amt_dec = 8
-        for char in reversed(pair_info[2]['stepSize']):
+        min_order = float(pair_info['asset_min_qty']) * self.candles[-1]['close']
+        self.min_order = 3 * max(min_order, float(pair_info['base_min_qty']))
+        amt_dec = len(pair_info['asset_precision'].split('.')[1])
+        for char in reversed(pair_info['asset_precision']):
             if char == "0": amt_dec -= 1
             else: break
         self.amt_dec = amt_dec
-        pt_dec = 8
-        for char in reversed(pair_info[0]['tickSize']):
+        pt_dec = len(pair_info['price_precision'].split('.')[1])
+        for char in reversed(pair_info['price_precision']):
             if char == "0": pt_dec -= 1
             else: break
         self.pt_dec = pt_dec
@@ -526,7 +529,7 @@ class Instance:
         # Create a new candle from 1m candles
         candle_new = dict()
         for i in range(self.interval):
-            candle_raw = self.candles_raw[-1-i]
+            candle_raw = self.candles_raw[-1 - i]
 
             if i == 0:
                 candle_new = candle_raw
@@ -538,7 +541,7 @@ class Instance:
                 candle_new["low"] = candle_raw["low"]
             candle_new["volume"] += candle_raw["volume"]
 
-            if i == self.interval-1:
+            if i == self.interval - 1:
                 candle_new["open"] = candle_raw["open"]
                 candle_new["ts_start"] = candle_raw["ts_start"]
                 self.candles.append(candle_new)
@@ -826,7 +829,7 @@ class Instance:
 
     def ping(self):
         # check if its time for a new candle
-        if (1000*time.time() - self.candles_raw[-1]["ts_end"]) < 60000: return
+        if (1000 * time.time() - self.candles_raw[-1]["ts_end"]) < 60000: return
         candles = self.get_historical_candles(self.pair, "1m", 2)
 
         # New raw candle?
