@@ -235,8 +235,11 @@ class Exchange:
         return data
 
     def get_open_orders(self, pair):
+        data = list()
+
         if self.name == "binance":
-            data = self.client.get_open_orders(symbol = pair)
+            open_orders = self.client.get_open_orders(symbol = pair)
+            data = list(open_orders)
         elif self.name == "kucoin":
             logger.error(f"Error: Unsupported exchange '{exchange}'."); exit()
 
@@ -372,8 +375,6 @@ class Instance:
         try:
             logger.warning("Trying to buy {} {} for {} {}. (price: {})".format(fix_dec(amt), self.asset, fix_dec(round(amt * pt, self.pt_dec)), self.base, fix_dec(pt)))
             self.last_order = {"type": "buy", "amt": amt, "pt": pt}
-            #client.order_limit_buy(symbol = self.pair, quantity = "{:.8f}".format(amt), price = "{:.8f}".format(pt))
-            #logger.error("Error: Not programmed."); exit()
             client.order_limit_buy(self.pair, amt, pt)
         except Exception as e:
             logger.error("Error buying.\n'{}'".format(e))
@@ -382,8 +383,6 @@ class Instance:
         try:
             logger.warning("Trying to sell {} {} for {} {}. (price: {})".format(fix_dec(amt), self.asset, fix_dec(round(amt * pt, self.pt_dec)), self.base, fix_dec(pt)))
             self.last_order = {"type": "sell", "amt": amt, "pt": pt}
-            #client.order_limit_sell(symbol = self.pair, quantity = "{:.8f}".format(amt), price = "{:.8f}".format(pt))
-            #logger.error("Error: Not programmed."); exit()
             client.order_limit_sell(self.pair, amt, pt)
         except Exception as e:
             logger.error("Error selling.\n'{}'".format(e))
@@ -419,13 +418,8 @@ class Instance:
     def close_orders(self):
         # close open orders
         try:
-            #orders = client.get_open_orders(symbol = self.pair)
-            #logger.error("Error: Not programmed."); exit()
             orders = client.get_open_orders(self.pair)
-            for order in orders:
-                #client.cancel_order(symbol = self.pair, orderId = order['orderId'])
-                #logger.error("Error: Not programmed."); exit()
-                client.cancel_order(self.pair, order['orderId'])
+            for order in orders: client.cancel_order(self.pair, order['orderId'])
         except Exception as e:
             logger.error("Error closing open orders.\n'{}'".format(e))
 
