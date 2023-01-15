@@ -208,15 +208,27 @@ class Exchange:
 
         if self.name == "binance":
             pair_info = self.client.get_symbol_info(pair)['filters']
-            data = pair_info
+            data = list(pair_info)
         elif self.name == "kucoin":
             logger.error(f"Error: Unsupported exchange '{exchange}'."); exit()
 
         return data
 
-    def get_historical_klines(self, pair, interval, start_str):
+    def get_historical_candles(self, pair, interval, start_str):
+        data = list()
+
         if self.name == "binance":
-            data = self.client.get_historical_klines(pair, interval, start_str)
+            candles = self.client.get_historical_klines(pair, interval, start_str)
+            for i in range(len(candles)):
+                candle = candles[i]
+                data.append({
+                    "ts_start": int(candle[0]),
+                    "open": round(float(candle[1]), 8),
+                    "high": round(float(candle[2]), 8),
+                    "low": round(float(candle[3]), 8),
+                    "close": round(float(candle[4]), 8),
+                    "volume": round(float(candle[5]), 8),
+                    "ts_end": int(candle[6])})
         elif self.name == "kucoin":
             logger.error(f"Error: Unsupported exchange '{exchange}'."); exit()
 
@@ -294,19 +306,18 @@ class Instance:
 
     def _get_candles_raw(self):
         # get enough 1m candles to create 600 historical candles
-        data = self.get_historical_candles(self.pair, "1m", 600 * self.interval)
-        data.pop()
-        for i in range(len(data)): data[i] = self.get_candle(data[i])
-        return data
+        candles_raw = self.get_historical_candles(self.pair, "1m", 600*self.interval)
+        candles_raw.pop()
+        return candles_raw
 
     def _get_candles(self):
         # convert historical 1m candles into historical candles
         candles = list(); candle_new = dict()
         candles_raw_clone = list(self.candles_raw)
-        for i in range(self.interval - 2): candles_raw_clone.pop()
+        for i in range(self.interval-2): candles_raw_clone.pop()
         for i in range(len(candles_raw_clone)):
             order = i % self.interval
-            candle_raw = candles_raw_clone[- 1 - i]
+            candle_raw = candles_raw_clone[-1-i]
 
             if order == 0:
                 candle_new = candle_raw
@@ -318,7 +329,7 @@ class Instance:
                 candle_new["low"] = candle_raw["low"]
             candle_new["volume"] += candle_raw["volume"]
 
-            if order == self.interval - 1:
+            if order == self.interval-1:
                 candle_new["open"] = candle_raw["open"]
                 candle_new["ts_start"] = candle_raw["ts_start"]
                 candles.append(candle_new)
@@ -328,55 +339,34 @@ class Instance:
     def _get_raw_unused(self):
         # get unused historical 1m candles
         raw_unused = -1
-        str_out = str()
-        data = self.candles_raw[-2 * self.interval:]
-        for i in range(len(data)):
-            candle_raw = data[i]
-            if raw_unused > -1:
-                raw_unused += 1
-            if candle_raw["ts_end"] == self.candles[-1]["ts_end"]:
-                raw_unused += 1
-                continue
-
-            if raw_unused > 0: str_out += "    {}\n".format(candle_raw)
+        #str_out = str()
+        candles_raw = self.candles_raw[-2*self.interval:]
+        for i in range(len(candles_raw)):
+            candle_raw = candles_raw[i]
+            if candle_raw["ts_end"] == self.candles[-1]["ts_end"]: raw_unused += 1
+            elif raw_unused > -1: raw_unused += 1
+            #if raw_unused > 0: str_out += "    {}\n".format(candle_raw)
 
         return raw_unused
-
-    def get_historical_candles_method(self, pair, interval, start_str):
-        data, err = list(), str()
-        #try: data = client.get_historical_klines(symbol, interval, start_str)
-        #try: logger.error("Error: Not programmed."); exit()
-        try: data = client.get_historical_klines(pair, interval, start_str)
-        except Exception as e: err = e
-        return data, err
 
     def get_historical_candles(self, pair, interval, n_candles):
         tries = 0
         while True:
-            data, err = self.get_historical_candles_method(pair, interval, "{} minutes ago UTC".format(n_candles))
+            candles, err = list(), str()
+            try: candles = client.get_historical_candles(pair, interval, "{} minutes ago UTC".format(n_candles))
+            except Exception as e: err = e
             tries += 1
-            if len(data) == 0:
+            if len(candles) == 0:
                 if tries <= 3:
                     err_msg = "Error getting historical candle data. Retrying in 5 seconds..."
                     if err != "": err_msg += "\n'{}'".format(err)
                     logger.error(err_msg)
-                if tries == 3: logger.error("(Future repeats of this error hidden to avoid spam.)")
+                if tries == 3:
+                    logger.error("(Future repeats of this error hidden to avoid spam.)")
                 time.sleep(5)
             else: break
         if tries > 3: logger.error("Failed to get historical candle data {} times.".format(tries - 1))
-        return data
-
-    def get_candle(self, data):
-        # data is a kline list from Binance
-        candle = {
-            "ts_start": int(data[0]),
-            "open": round(float(data[1]), 8),
-            "high": round(float(data[2]), 8),
-            "low": round(float(data[3]), 8),
-            "close": round(float(data[4]), 8),
-            "volume": round(float(data[5]), 8),
-            "ts_end": int(data[6])}
-        return candle
+        return candles
 
     def limit_buy(self, amt, pt):
         try:
@@ -542,7 +532,7 @@ class Instance:
         # Create a new candle from 1m candles
         candle_new = dict()
         for i in range(self.interval):
-            candle_raw = self.candles_raw[- 1 - i]
+            candle_raw = self.candles_raw[-1-i]
 
             if i == 0:
                 candle_new = candle_raw
@@ -554,7 +544,7 @@ class Instance:
                 candle_new["low"] = candle_raw["low"]
             candle_new["volume"] += candle_raw["volume"]
 
-            if i == self.interval - 1:
+            if i == self.interval-1:
                 candle_new["open"] = candle_raw["open"]
                 candle_new["ts_start"] = candle_raw["ts_start"]
                 self.candles.append(candle_new)
@@ -842,14 +832,13 @@ class Instance:
 
     def ping(self):
         # check if its time for a new candle
-        if (1000 * time.time() - self.candles_raw[-1]["ts_end"]) < 60000: return
-        data = self.get_historical_candles(self.pair, "1m", 2)
-        data_top = self.get_candle(data[0])
+        if (1000*time.time() - self.candles_raw[-1]["ts_end"]) < 60000: return
+        candles = self.get_historical_candles(self.pair, "1m", 2)
 
         # New raw candle?
-        if data_top["ts_end"] != self.candles_raw[-1]["ts_end"]:
+        if candles[0]["ts_end"] != self.candles_raw[-1]["ts_end"]:
             self.candles_raw_unused += 1
-            self.candles_raw.append(data_top)
+            self.candles_raw.append(candles[0])
             self.candles_raw = self.candles_raw[-2 * self.interval:]
 
         # New candle?
