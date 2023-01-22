@@ -1,5 +1,5 @@
 """
-Kucoin Pybot v1.1 (23-1-15)
+Kucoin Pybot v1.1 (23-1-22)
 https://github.com/rulibar/kucoin-pybot
 
 Warning: Not yet working.
@@ -76,6 +76,8 @@ class Exchange:
         # Exchange vars
         self.first_tick = True
         self.positions_init_ts = 0
+        self.last_acc_check = 0
+        self.last_acc_check_cache = 0
 
         # Binance vars
         self.deposits_pending = set()
@@ -94,12 +96,15 @@ class Exchange:
     def get_account(self, asset, base):
         data = {"asset": [asset, 0.0], "base": [base, 0.0]}
 
+        self.last_acc_check_cache = int(self.last_acc_check)
         if self.positions_init_ts == 0:
             self.positions_init_ts = int(1000 * time.time())
             self.earliest_pending = int(self.positions_init_ts)
+            self.last_acc_check_cache = int(self.positions_init_ts)
 
         if self.name == "binance":
             acc = self.client.get_account()["balances"]
+            self.last_acc_check = int(1000 * time.time())
             for i in range(len(acc)):
                 acc_asset = acc[i]["asset"]
                 if acc_asset not in {asset, base}: continue
@@ -116,10 +121,11 @@ class Exchange:
     def get_dws(self, asset, base, ts_last):
         data = list()
 
+        #ts_last = int(self.last_acc_check_cache)
         if self.name == "binance":
             if len(self.deposits_pending) == 0 and len(self.withdrawals_pending) == 0: self.earliest_pending = ts_last
             start_time = self.earliest_pending - 1000
-            if self.first_tick: start_time = self.earliest_pending - 7 * 24 * 60 * 60 * 1000
+            if self.first_tick: start_time = self.earliest_pending - 24 * 60 * 60 * 1000
 
             deposits = self.client.get_deposit_history(startTime = start_time)
             withdrawals = self.client.get_withdraw_history(startTime = start_time)
@@ -163,11 +169,15 @@ class Exchange:
                     self.deposits_pending.add(id)
                     self.earliest_pending = start_time
                     continue
+                d_obj = dict()
+                d_obj['asset'] = deposit['asset']
+                d_obj['amt'] = deposit['amount']
+                d_obj['fee'] = 0.0
                 if id not in self.deposits_pending:
                     if not self.first_tick and deposit['insertTime'] > ts_last:
-                        d_complete.append(deposit)
+                        d_complete.append(d_obj)
                     continue
-                d_complete.append(deposit)
+                d_complete.append(d_obj)
                 self.deposits_pending.remove(id)
             for withdrawal in withdrawals:
                 id = withdrawal['id']
@@ -175,11 +185,15 @@ class Exchange:
                     self.withdrawals_pending.add(id)
                     self.earliest_pending = start_time
                     continue
+                w_obj = dict()
+                w_obj['asset'] = withdrawal['asset']
+                w_obj['amt'] = withdrawal['amount']
+                w_obj['fee'] = withdrawal['transactionFee']
                 if id not in self.withdrawals_pending:
                     if not self.first_tick and withdrawal['applyTime'] > ts_last:
-                        w_complete.append(withdrawal)
+                        w_complete.append(w_obj)
                     continue
-                w_complete.append(withdrawal)
+                w_complete.append(w_obj)
                 self.withdrawals_pending.remove(id)
 
             data.append(d_complete)
@@ -192,12 +206,25 @@ class Exchange:
     def get_trades(self, pair, max_num, ts_last):
         data = list()
 
-        start_time = int(ts_last)
-        if self.first_tick: start_time = self.positions_init_ts
+        #start_time = int(ts_last)
+        #if self.first_tick: start_time = self.positions_init_ts
 
         if self.name == "binance":
             trades = reversed(self.client.get_my_trades(symbol = pair, limit = max_num))
-            data = [tr for tr in trades if tr['time'] > start_time]
+            #data = [tr for tr in trades if tr['time'] > start_time]
+            for trade in trades:
+                #if trade['time'] < start_time: continue
+                if trade['time'] < self.last_acc_check_cache: continue
+                if trade['time'] > self.last_acc_check: continue
+                tr = dict()
+                tr['amt_asset'] = trade['qty']
+                tr['amt_base'] = trade['quoteQty']
+                tr['amt_fee'] = trade['commission']
+                tr['fee_currency'] = trade['commissionAsset']
+                tr['price'] = trade['price']
+                tr['side'] = 'sell'
+                if trade['isBuyer']: tr['side'] = 'buy'
+                data.append(tr)
         elif self.name == "kucoin":
             logger.error(f"Error: Unsupported exchange '{exchange}'."); exit()
 
@@ -217,11 +244,13 @@ class Exchange:
 
         return data
 
-    def get_historical_candles(self, pair, interval, start_str):
+    def get_historical_candles(self, pair, interval, n_candles):
         data = list()
 
         if self.name == "binance":
-            candles = self.client.get_historical_klines(pair, interval, start_str)
+            interval_str = f"{interval}m"
+            start_str = f"{n_candles} minutes ago UTC"
+            candles = self.client.get_historical_klines(pair, interval_str, start_str)
             for i in range(len(candles)):
                 candle = candles[i]
                 data.append({
@@ -242,7 +271,8 @@ class Exchange:
 
         if self.name == "binance":
             open_orders = self.client.get_open_orders(symbol = pair)
-            data = list(open_orders)
+            data = [{"order_id": order["orderId"]} for order in open_orders]
+            #data = list(open_orders)
         elif self.name == "kucoin":
             logger.error(f"Error: Unsupported exchange '{exchange}'."); exit()
 
@@ -312,7 +342,7 @@ class Instance:
 
     def _get_candles_raw(self):
         # get enough 1m candles to create 600 historical candles
-        candles_raw = self.get_historical_candles(self.pair, "1m", 600 * self.interval)
+        candles_raw = self.get_historical_candles(self.pair, 1, 600 * self.interval)
         candles_raw.pop()
         return candles_raw
 
@@ -359,7 +389,8 @@ class Instance:
         tries = 0
         while True:
             candles, err = list(), str()
-            try: candles = client.get_historical_candles(pair, interval, "{} minutes ago UTC".format(n_candles))
+            #try: candles = client.get_historical_candles(pair, interval, "{} minutes ago UTC".format(n_candles))
+            try: candles = client.get_historical_candles(pair, interval, n_candles)
             except Exception as e: err = e
             tries += 1
             if len(candles) == 0:
@@ -422,7 +453,8 @@ class Instance:
         # close open orders
         try:
             orders = client.get_open_orders(self.pair)
-            for order in orders: client.cancel_order(self.pair, order['orderId'])
+            #for order in orders: client.cancel_order(self.pair, order['orderId'])
+            for order in orders: client.cancel_order(self.pair, order['order_id'])
         except Exception as e:
             logger.error("Error closing open orders.\n'{}'".format(e))
 
@@ -601,7 +633,7 @@ class Instance:
         for deposit in deposits:
             diffasset = 0; diffbase = 0
             asset = deposit['asset']
-            amt = deposit['amount']
+            amt = deposit['amt']
             if self.params['log_dws'] == "yes":
                 logger.warning("Deposit of {} {} detected.".format(fix_dec(amt), asset))
             if asset == self.base: diffbase += amt
@@ -610,7 +642,7 @@ class Instance:
         for withdrawal in withdrawals:
             diffasset = 0; diffbase = 0
             asset = withdrawal['asset']
-            amt = withdrawal['amount'] + withdrawal['transactionFee']
+            amt = withdrawal['amt'] + withdrawal['fee']
             if self.params['log_dws'] == "yes":
                 logger.warning("Withdrawal of {} {} detected.".format(fix_dec(amt), asset))
             if asset == self.base: diffbase -= amt
@@ -636,11 +668,11 @@ class Instance:
             #str_out = "{} new trade(s) found.".format(len(trades))
             for trade in trades:
                 #str_out += "\n    {}".format(trade)
-                qty = float(trade['qty'])
+                amt = float(trade['amt_asset'])
                 price = float(trade['price'])
-                if not trade['isBuyer']: qty *= -1
-                diffasset_trad += qty
-                diffbase_trad -= qty * price
+                if trade['side'] != 'buy': amt *= -1
+                diffasset_trad += amt
+                diffbase_trad -= amt * price
 
         rbuy = s['rinTarget'] - s['rinTargetLast']
         rTrade = 0
@@ -830,7 +862,7 @@ class Instance:
     def ping(self):
         # check if its time for a new candle
         if (1000 * time.time() - self.candles_raw[-1]["ts_end"]) < 60000: return
-        candles = self.get_historical_candles(self.pair, "1m", 2)
+        candles = self.get_historical_candles(self.pair, 1, 2)
 
         # New raw candle?
         if candles[0]["ts_end"] != self.candles_raw[-1]["ts_end"]:
