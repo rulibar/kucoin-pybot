@@ -80,9 +80,8 @@ class Exchange:
         self.last_acc_check_cache = 0
 
         # Binance vars
-        self.deposits_pending = set()
-        self.withdrawals_pending = set()
-        self.earliest_pending = 0
+        self.deposits_pending = dict()
+        self.withdrawals_pending = dict()
 
         # KuCoin vars
         self.tickers = dict()
@@ -99,7 +98,6 @@ class Exchange:
         self.last_acc_check_cache = int(self.last_acc_check)
         if self.positions_init_ts == 0:
             self.positions_init_ts = int(1000 * time.time())
-            self.earliest_pending = int(self.positions_init_ts)
             self.last_acc_check_cache = int(self.positions_init_ts)
 
         if self.name == "binance":
@@ -118,14 +116,15 @@ class Exchange:
 
         return data
 
-    def get_dws(self, asset, base, ts_last):
+    def get_dws(self, asset, base):
         data = list()
 
-        #ts_last = int(self.last_acc_check_cache)
+        ts_last = int(self.last_acc_check_cache)
         if self.name == "binance":
-            if len(self.deposits_pending) == 0 and len(self.withdrawals_pending) == 0: self.earliest_pending = ts_last
-            start_time = self.earliest_pending - 1000
-            if self.first_tick: start_time = self.earliest_pending - 24 * 60 * 60 * 1000
+            start_time = int(ts_last)
+            for dep in self.deposits_pending: start_time = min([start_time, self.deposits_pending[dep] - 1000])
+            for wit in self.withdrawals_pending: start_time = min([start_time, self.withdrawals_pending[wit] - 1000])
+            if self.first_tick: start_time -= 24 * 60 * 60 * 1000
 
             deposits = self.client.get_deposit_history(startTime = start_time)
             withdrawals = self.client.get_withdraw_history(startTime = start_time)
@@ -166,35 +165,31 @@ class Exchange:
             for deposit in deposits:
                 id = deposit['txId']
                 if deposit['status'] < 1:
-                    self.deposits_pending.add(id)
-                    self.earliest_pending = start_time
+                    self.deposits_pending[id] = deposit['insertTime']
                     continue
                 d_obj = dict()
                 d_obj['asset'] = deposit['asset']
                 d_obj['amt'] = deposit['amount']
                 d_obj['fee'] = 0.0
-                if id not in self.deposits_pending:
-                    if not self.first_tick and deposit['insertTime'] > ts_last:
-                        d_complete.append(d_obj)
+                if id not in self.deposits_pending.keys():
+                    if deposit['insertTime'] > ts_last: d_complete.append(d_obj)
                     continue
                 d_complete.append(d_obj)
-                self.deposits_pending.remove(id)
+                self.deposits_pending.pop(id)
             for withdrawal in withdrawals:
                 id = withdrawal['id']
                 if withdrawal['status'] < 0:
-                    self.withdrawals_pending.add(id)
-                    self.earliest_pending = start_time
+                    self.withdrawals_pending[id] = withdrawal['applyTime']
                     continue
                 w_obj = dict()
                 w_obj['asset'] = withdrawal['asset']
                 w_obj['amt'] = withdrawal['amount']
                 w_obj['fee'] = withdrawal['transactionFee']
-                if id not in self.withdrawals_pending:
-                    if not self.first_tick and withdrawal['applyTime'] > ts_last:
-                        w_complete.append(w_obj)
+                if id not in self.withdrawals_pending.keys():
+                    if withdrawal['applyTime'] > ts_last: w_complete.append(w_obj)
                     continue
                 w_complete.append(w_obj)
-                self.withdrawals_pending.remove(id)
+                self.withdrawals_pending.pop(id)
 
             data.append(d_complete)
             data.append(w_complete)
@@ -203,17 +198,12 @@ class Exchange:
 
         return data
 
-    def get_trades(self, pair, max_num, ts_last):
+    def get_trades(self, pair, max_num):
         data = list()
-
-        #start_time = int(ts_last)
-        #if self.first_tick: start_time = self.positions_init_ts
 
         if self.name == "binance":
             trades = reversed(self.client.get_my_trades(symbol = pair, limit = max_num))
-            #data = [tr for tr in trades if tr['time'] > start_time]
             for trade in trades:
-                #if trade['time'] < start_time: continue
                 if trade['time'] < self.last_acc_check_cache: continue
                 if trade['time'] > self.last_acc_check: continue
                 tr = dict()
@@ -272,7 +262,6 @@ class Exchange:
         if self.name == "binance":
             open_orders = self.client.get_open_orders(symbol = pair)
             data = [{"order_id": order["orderId"]} for order in open_orders]
-            #data = list(open_orders)
         elif self.name == "kucoin":
             logger.error(f"Error: Unsupported exchange '{exchange}'."); exit()
 
@@ -389,7 +378,6 @@ class Instance:
         tries = 0
         while True:
             candles, err = list(), str()
-            #try: candles = client.get_historical_candles(pair, interval, "{} minutes ago UTC".format(n_candles))
             try: candles = client.get_historical_candles(pair, interval, n_candles)
             except Exception as e: err = e
             tries += 1
@@ -453,7 +441,6 @@ class Instance:
         # close open orders
         try:
             orders = client.get_open_orders(self.pair)
-            #for order in orders: client.cancel_order(self.pair, order['orderId'])
             for order in orders: client.cancel_order(self.pair, order['order_id'])
         except Exception as e:
             logger.error("Error closing open orders.\n'{}'".format(e))
@@ -622,10 +609,9 @@ class Instance:
 
     def process_dws(self):
         diffasset_dw = 0; diffbase_dw = 0
-        ts_last = self.candles[-2]['ts_end']
 
         try:
-            deposits, withdrawals = client.get_dws(self.asset, self.base, ts_last)
+            deposits, withdrawals = client.get_dws(self.asset, self.base)
         except Exception as e:
             logger.error("Error getting deposits and withdrawals.\n'{}'".format(e))
             return 0, 0
@@ -653,12 +639,11 @@ class Instance:
 
     def process_trades(self, p):
         diffasset_trad = 0; diffbase_trad = 0
-        ts_last = self.candles[-2]['ts_end']
         l = self.last_order
         s = self.signal
 
         # Get trades
-        try: trades = client.get_trades(self.pair, 20, ts_last)
+        try: trades = client.get_trades(self.pair, 20)
         except Exception as e:
             logger.error("Error getting trade info.\n'{}'".format(e))
             return 0, 0, p.price
