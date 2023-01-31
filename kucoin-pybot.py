@@ -1,5 +1,5 @@
 """
-Kucoin Pybot v1.1 (23-1-22)
+Kucoin Pybot v1.1 (23-1-31)
 https://github.com/rulibar/kucoin-pybot
 
 Warning: Not yet working.
@@ -10,6 +10,7 @@ import time
 from calendar import timegm as timegm
 import numpy
 import random
+import json
 import logging
 import talib
 
@@ -112,7 +113,17 @@ class Exchange:
                 if acc_asset == asset: data['asset'][1] = total
                 if acc_asset == base: data['base'][1] = total
         elif self.name == "kucoin":
-            logger.error(f"Error: Unsupported exchange '{exchange}'."); exit()
+            #logger.error(f"Error: Unsupported exchange '{exchange}'."); exit()
+            acc = self.client.get_accounts()
+            self.last_acc_check = int(1000 * time.time())
+            for i in range(len(acc)):
+                acc_asset = self.tickers[acc[i]["currency"]]
+                if acc_asset not in {asset, base}: continue
+                free = float(acc[i]["available"])
+                locked = float(acc[i]["holds"])
+                total = free + locked
+                if acc_asset == asset: data['asset'][1] = total
+                if acc_asset == base: data['base'][1] = total
 
         return data
 
@@ -194,7 +205,28 @@ class Exchange:
             data.append(d_complete)
             data.append(w_complete)
         elif self.name == "kucoin":
-            logger.error(f"Error: Unsupported exchange '{exchange}'."); exit()
+            #logger.error(f"Error: Unsupported exchange '{exchange}'."); exit()
+            account_activity = client.get_account_activity()['items']
+            d_complete = list()
+            w_complete = list()
+
+            for i in range(len(account_activity)):
+                item = account_activity[i]
+                if item['accountType'] != 'TRADE': continue
+                if item['bizType'] != 'Transfer': continue
+                if item['createdAt'] < self.last_acc_check_cache: continue
+                if item['createdAt'] > self.last_acc_check: continue
+                item_asset = self.tickers[item['currency']]
+                if item_asset not in {asset, base}: continue
+                item_obj = dict()
+                item_obj['asset'] = item_asset
+                item_obj['amt'] = item['amount']
+                item_obj['fee'] = 0.0
+                if item['direction'] == 'in': d_complete.append(item_obj)
+                if item['direction'] == 'out': w_complete.append(item_obj)
+
+            data.append(d_complete)
+            data.append(w_complete)
 
         return data
 
@@ -211,12 +243,52 @@ class Exchange:
                 tr['amt_base'] = trade['quoteQty']
                 tr['amt_fee'] = trade['commission']
                 tr['fee_currency'] = trade['commissionAsset']
-                tr['price'] = trade['price']
+                #tr['price'] = trade['price']
                 tr['side'] = 'sell'
                 if trade['isBuyer']: tr['side'] = 'buy'
                 data.append(tr)
         elif self.name == "kucoin":
-            logger.error(f"Error: Unsupported exchange '{exchange}'."); exit()
+            #logger.error(f"Error: Unsupported exchange '{exchange}'."); exit()
+            account_activity = client.get_account_activity()['items']
+            trades = dict()
+            account_activity = [item for item in account_activity if item['accountType'] == 'TRADE']
+            account_activity = [item for item in account_activity if item['createdAt'] > self.last_acc_check_cache]
+            account_activity = [item for item in account_activity if item['createdAt'] < self.last_acc_check]
+
+            for i in range(len(account_activity)):
+                item = account_activity[i]
+                if item['bizType'] != 'Exchange': continue
+                item_asset = self.tickers[item['currency']]
+                if item_asset not in {asset, base}: continue
+                context = json.loads(item['context'])
+                id = context['orderId']
+                if id not in trades:
+                    trades[id] = dict()
+                    trades[id]['amt_asset'] = 0.0
+                    trades[id]['amt_base'] = 0.0
+                    trades[id]['amt_fee'] = 0.0
+                    trades[id]['side'] = 'buy'
+                if item_asset == base:
+                    trades[id]['amt_base'] += float(item['amount'])
+                    trades[id]['amt_fee'] += float(item['fee'])
+                    trades[id]['fee_currency'] = base
+                elif item_asset == asset:
+                    trades[id]['amt_asset'] += float(item['amount'])
+                    if item['direction'] == 'out': trades[id]['side'] = 'sell'
+            for i in range(len(account_activity)):
+                item = account_activity[i]
+                if item['bizType'] != 'KCS Pay Fees': continue
+                item_asset = self.tickers[item['currency']]
+                context = json.loads(item['context'])
+                id = context['orderId']
+                if id in trades:
+                    trades[id]['amt_fee'] = float(item['amount'])
+                    trades[id]['fee_currency'] = item_asset
+            for id in trades:
+                for key in trades[id]:
+                    if key in {'fee_currency', 'side'}: continue
+                    trades[id][key] = f"{trades[id][key]:.8f}"
+                data.append(trades[id])
 
         return data
 
@@ -653,11 +725,12 @@ class Instance:
             #str_out = "{} new trade(s) found.".format(len(trades))
             for trade in trades:
                 #str_out += "\n    {}".format(trade)
-                amt = float(trade['amt_asset'])
-                price = float(trade['price'])
-                if trade['side'] != 'buy': amt *= -1
-                diffasset_trad += amt
-                diffbase_trad -= amt * price
+                amt_asset = float(trade['amt_asset'])
+                amt_base = float(trade['amt_base'])
+                price = amt_base / amt_asset
+                if trade['side'] != 'buy': amt_asset *= -1
+                diffasset_trad += amt_asset
+                diffbase_trad -= amt_asset * price
 
         rbuy = s['rinTarget'] - s['rinTargetLast']
         rTrade = 0
