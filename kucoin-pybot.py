@@ -316,10 +316,11 @@ class Exchange:
 
         return data
 
-    def get_historical_candles(self, pair, interval, n_candles):
+    def get_historical_candles(self, asset, base, interval, n_candles):
         data = list()
 
         if self.name == "binance":
+            pair = f'{asset}{base}'
             interval_str = f"{interval}m"
             start_str = f"{n_candles} minutes ago UTC"
             candles = self.client.get_historical_klines(pair, interval_str, start_str)
@@ -338,34 +339,46 @@ class Exchange:
 
         return data
 
-    def get_open_orders(self, pair):
+    def get_open_orders(self, asset, base):
         data = list()
 
         if self.name == "binance":
+            pair = f'{asset}{base}'
             open_orders = self.client.get_open_orders(symbol = pair)
             data = [{"order_id": order["orderId"]} for order in open_orders]
         elif self.name == "kucoin":
-            logger.error(f"Error: Unsupported exchange '{exchange}'."); exit()
+            #logger.error(f"Error: Unsupported exchange '{exchange}'."); exit()
+            pair = f'{asset}-{base}'
+            open_orders = self.client.get_orders(symbol = pair, status = 'active')['items']
+            data = [{"order_id": order["id"]} for order in open_orders]
 
         return data
 
-    def cancel_order(self, pair, order_id):
+    def cancel_order(self, asset, base, order_id):
         if self.name == "binance":
+            pair = f'{asset}{base}'
             self.client.cancel_order(symbol = pair, orderId = order_id)
         elif self.name == "kucoin":
-            logger.error(f"Error: Unsupported exchange '{exchange}'."); exit()
+            #ogger.error(f"Error: Unsupported exchange '{exchange}'."); exit()
+            self.client.cancel_order(order_id)
 
-    def order_limit_buy(self, pair, amt, pt):
+    def order_limit_buy(self, asset, base, amt, pt):
         if self.name == "binance":
+            pair = f'{asset}{base}'
             self.client.order_limit_buy(symbol = pair, quantity = "{:.8f}".format(amt), price = "{:.8f}".format(pt))
         elif self.name == "kucoin":
-            logger.error(f"Error: Unsupported exchange '{exchange}'."); exit()
+            #logger.error(f"Error: Unsupported exchange '{exchange}'."); exit()
+            pair = f'{asset}-{base}'
+            self.client.create_limit_order(symbol = pair, size = "{:.8f}".format(amt), price = "{:.8f}".format(pt), side = 'buy')
 
-    def order_limit_sell(self, pair, amt, pt):
+    def order_limit_sell(self, asset, base, amt, pt):
         if self.name == "binance":
+            pair = f'{asset}{base}'
             self.client.order_limit_sell(symbol = pair, quantity = "{:.8f}".format(amt), price = "{:.8f}".format(pt))
         elif self.name == "kucoin":
-            logger.error(f"Error: Unsupported exchange '{exchange}'."); exit()
+            #logger.error(f"Error: Unsupported exchange '{exchange}'."); exit()
+            pair = f'{asset}-{base}'
+            self.client.create_limit_order(symbol = pair, size = "{:.8f}".format(amt), price = "{:.8f}".format(pt), side = 'sell')
 
 class Portfolio:
     def __init__(self, candle, positions, funds):
@@ -413,7 +426,7 @@ class Instance:
 
     def _get_candles_raw(self):
         # get enough 1m candles to create 600 historical candles
-        candles_raw = self.get_historical_candles(self.pair, 1, 600 * self.interval)
+        candles_raw = self.get_historical_candles(self.asset, self.base, 1, 600 * self.interval)
         candles_raw.pop()
         return candles_raw
 
@@ -456,11 +469,11 @@ class Instance:
 
         return raw_unused
 
-    def get_historical_candles(self, pair, interval, n_candles):
+    def get_historical_candles(self, asset, base, interval, n_candles):
         tries = 0
         while True:
             candles, err = list(), str()
-            try: candles = client.get_historical_candles(pair, interval, n_candles)
+            try: candles = client.get_historical_candles(asset, base, interval, n_candles)
             except Exception as e: err = e
             tries += 1
             if len(candles) == 0:
@@ -479,7 +492,7 @@ class Instance:
         try:
             logger.warning("Trying to buy {} {} for {} {}. (price: {})".format(fix_dec(amt), self.asset, fix_dec(round(amt * pt, self.pt_dec)), self.base, fix_dec(pt)))
             self.last_order = {"type": "buy", "amt": amt, "pt": pt}
-            client.order_limit_buy(self.pair, amt, pt)
+            client.order_limit_buy(self.asset, self.base, amt, pt)
         except Exception as e:
             logger.error("Error buying.\n'{}'".format(e))
 
@@ -487,7 +500,7 @@ class Instance:
         try:
             logger.warning("Trying to sell {} {} for {} {}. (price: {})".format(fix_dec(amt), self.asset, fix_dec(round(amt * pt, self.pt_dec)), self.base, fix_dec(pt)))
             self.last_order = {"type": "sell", "amt": amt, "pt": pt}
-            client.order_limit_sell(self.pair, amt, pt)
+            client.order_limit_sell(self.asset, self.base, amt, pt)
         except Exception as e:
             logger.error("Error selling.\n'{}'".format(e))
 
@@ -522,8 +535,8 @@ class Instance:
     def close_orders(self):
         # close open orders
         try:
-            orders = client.get_open_orders(self.pair)
-            for order in orders: client.cancel_order(self.pair, order['order_id'])
+            orders = client.get_open_orders(self.asset, self.base)
+            for order in orders: client.cancel_order(self.asset, self.base, order['order_id'])
         except Exception as e:
             logger.error("Error closing open orders.\n'{}'".format(e))
 
@@ -938,7 +951,7 @@ class Instance:
     def ping(self):
         # check if its time for a new candle
         if (1000 * time.time() - self.candles_raw[-1]["ts_end"]) < 60000: return
-        candles = self.get_historical_candles(self.pair, 1, 2)
+        candles = self.get_historical_candles(self.asset, self.base, 1, 2)
 
         # New raw candle?
         if candles[0]["ts_end"] != self.candles_raw[-1]["ts_end"]:
