@@ -1,5 +1,5 @@
 """
-Kucoin Pybot v1.1 (23-1-31)
+Kucoin Pybot v1.1 (23-2-1)
 https://github.com/rulibar/kucoin-pybot
 
 Warning: Not yet working.
@@ -75,7 +75,7 @@ class Exchange:
         else: logger.error(f"Error: Unsupported exchange '{exchange}'."); exit()
 
         # Exchange vars
-        self.first_tick = True
+        #self.first_tick = True
         self.positions_init_ts = 0
         self.last_acc_check = 0
         self.last_acc_check_cache = 0
@@ -135,7 +135,8 @@ class Exchange:
             start_time = int(ts_last)
             for dep in self.deposits_pending: start_time = min([start_time, self.deposits_pending[dep] - 1000])
             for wit in self.withdrawals_pending: start_time = min([start_time, self.withdrawals_pending[wit] - 1000])
-            if self.first_tick: start_time -= 24 * 60 * 60 * 1000
+            #if self.first_tick: start_time -= 24 * 60 * 60 * 1000
+            if start_time == self.positions_init_ts: start_time -= 24 * 60 * 60 * 1000
 
             deposits = self.client.get_deposit_history(startTime = start_time)
             withdrawals = self.client.get_withdraw_history(startTime = start_time)
@@ -206,7 +207,7 @@ class Exchange:
             data.append(w_complete)
         elif self.name == "kucoin":
             #logger.error(f"Error: Unsupported exchange '{exchange}'."); exit()
-            account_activity = client.get_account_activity()['items']
+            account_activity = self.client.get_account_activity()['items']
             d_complete = list()
             w_complete = list()
 
@@ -230,10 +231,11 @@ class Exchange:
 
         return data
 
-    def get_trades(self, pair, max_num):
+    def get_trades(self, asset, base, max_num):
         data = list()
 
         if self.name == "binance":
+            pair = f'{asset}{base}'
             trades = reversed(self.client.get_my_trades(symbol = pair, limit = max_num))
             for trade in trades:
                 if trade['time'] < self.last_acc_check_cache: continue
@@ -249,7 +251,7 @@ class Exchange:
                 data.append(tr)
         elif self.name == "kucoin":
             #logger.error(f"Error: Unsupported exchange '{exchange}'."); exit()
-            account_activity = client.get_account_activity()['items']
+            account_activity = self.client.get_account_activity()['items']
             trades = dict()
             account_activity = [item for item in account_activity if item['accountType'] == 'TRADE']
             account_activity = [item for item in account_activity if item['createdAt'] > self.last_acc_check_cache]
@@ -292,17 +294,25 @@ class Exchange:
 
         return data
 
-    def get_pair_info(self, pair):
+    def get_pair_info(self, asset, base):
         data = dict()
 
         if self.name == "binance":
+            pair = f'{asset}{base}'
             pair_info = self.client.get_symbol_info(pair)['filters']
             data['asset_min_qty'] = pair_info[2]['minQty']
             data['base_min_qty'] = pair_info[3]['minNotional']
             data['asset_precision'] = pair_info[2]['stepSize']
             data['price_precision'] = pair_info[0]['tickSize']
         elif self.name == "kucoin":
-            logger.error(f"Error: Unsupported exchange '{exchange}'."); exit()
+            #logger.error(f"Error: Unsupported exchange '{exchange}'."); exit()
+            pair = f'{asset}-{base}'
+            pair_info = self.client.get_symbols()
+            pair_info = [item for item in pair_info if item['name'] == pair][0]
+            data['asset_min_qty'] = pair_info['baseMinSize']
+            data['base_min_qty'] = pair_info['quoteMinSize']
+            data['asset_precision'] = pair_info['baseIncrement']
+            data['price_precision'] = pair_info['priceIncrement']
 
         return data
 
@@ -521,24 +531,32 @@ class Instance:
         # Get preliminary vars
         self.ticks += 1
         self.days = (self.ticks - 1) * self.interval / (60 * 24)
-        if self.ticks == 2: client.first_tick = False
+        #if self.ticks == 2: client.first_tick = False
 
-        try: pair_info = client.get_pair_info(self.pair)
+        try: pair_info = client.get_pair_info(self.asset, self.base)
         except Exception as e:
             logger.error("Error getting pair info.\n'{}'".format(e))
             return
 
         min_order = float(pair_info['asset_min_qty']) * self.candles[-1]['close']
         self.min_order = 3 * max(min_order, float(pair_info['base_min_qty']))
+
         amt_dec = len(pair_info['asset_precision'].split('.')[1])
         for char in reversed(pair_info['asset_precision']):
             if char == "0": amt_dec -= 1
             else: break
+        if amt_dec > 8:
+            logger.error(f"Error: Asset precision is too high. Changing amt_dec from {amt_dec} to 8.")
+            amt_dec = 8
         self.amt_dec = amt_dec
+
         pt_dec = len(pair_info['price_precision'].split('.')[1])
         for char in reversed(pair_info['price_precision']):
             if char == "0": pt_dec -= 1
             else: break
+        if pt_dec > 8:
+            logger.error(f"Error: Price precision is too high. Changing pt_dec from {pt_dec} to 8.")
+            pt_dec = 8
         self.pt_dec = pt_dec
 
     def get_params(self):
@@ -715,7 +733,7 @@ class Instance:
         s = self.signal
 
         # Get trades
-        try: trades = client.get_trades(self.pair, 20)
+        try: trades = client.get_trades(self.asset, self.base, 20)
         except Exception as e:
             logger.error("Error getting trade info.\n'{}'".format(e))
             return 0, 0, p.price
