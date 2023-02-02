@@ -1,5 +1,5 @@
 """
-Kucoin Pybot v1.1 (23-2-1)
+Kucoin Pybot v1.1 (23-2-2)
 https://github.com/rulibar/kucoin-pybot
 
 Warning: Not yet working.
@@ -316,14 +316,30 @@ class Exchange:
 
         return data
 
-    def get_historical_candles(self, asset, base, interval, n_candles):
+    def get_historical_candles(self, asset, base, n_candles):
         data = list()
 
         if self.name == "binance":
             pair = f'{asset}{base}'
-            interval_str = f"{interval}m"
             start_str = f"{n_candles} minutes ago UTC"
-            candles = self.client.get_historical_klines(pair, interval_str, start_str)
+
+            tries = 0
+            while True:
+                candles, err = list(), str()
+                try: candles = self.client.get_historical_klines(pair, "1m", start_str)
+                except Exception as e: err = e
+                tries += 1
+                if len(candles) == 0:
+                    if tries <= 3:
+                        err_msg = "Error getting historical candle data. Retrying in 5 seconds..."
+                        if err != "": err_msg += "\n'{}'".format(err)
+                        logger.error(err_msg)
+                    if tries == 3:
+                        logger.error("(Future repeats of this error hidden to avoid spam.)")
+                    time.sleep(5)
+                else: break
+            if tries > 3: logger.error("Failed to get historical candle data {} times.".format(tries - 1))
+
             for i in range(len(candles)):
                 candle = candles[i]
                 data.append({
@@ -336,6 +352,8 @@ class Exchange:
                     "ts_end": int(candle[6])})
         elif self.name == "kucoin":
             logger.error(f"Error: Unsupported exchange '{exchange}'."); exit()
+            #pair = f'{asset}-{base}'
+            #interval_str = '1min'
 
         return data
 
@@ -426,8 +444,16 @@ class Instance:
 
     def _get_candles_raw(self):
         # get enough 1m candles to create 600 historical candles
-        candles_raw = self.get_historical_candles(self.asset, self.base, 1, 600 * self.interval)
+        candles_raw = client.get_historical_candles(self.asset, self.base, 600 * self.interval)
         candles_raw.pop()
+        #top_off = client.get_historical_candles(self.asset, self.base, 100)
+        #for i in range(len(top_off)):
+        #    if top_off[-1]['ts_end'] == candles_raw[-1]['ts_end']: candles_raw.pop(); break
+        #    elif top_off[i]['ts_end'] < candles_raw[-1]['ts_end']: continue
+        #    elif top_off[i]['ts_end'] == candles_raw[-1]['ts_end']: candles_raw[-1] = top_off[i]
+        #    elif i == len(top_off) - 1: continue
+        #    else: candles_raw.append(top_off[i])
+
         return candles_raw
 
     def _get_candles(self):
@@ -468,25 +494,6 @@ class Instance:
             #if raw_unused > 0: str_out += "    {}\n".format(candle_raw)
 
         return raw_unused
-
-    def get_historical_candles(self, asset, base, interval, n_candles):
-        tries = 0
-        while True:
-            candles, err = list(), str()
-            try: candles = client.get_historical_candles(asset, base, interval, n_candles)
-            except Exception as e: err = e
-            tries += 1
-            if len(candles) == 0:
-                if tries <= 3:
-                    err_msg = "Error getting historical candle data. Retrying in 5 seconds..."
-                    if err != "": err_msg += "\n'{}'".format(err)
-                    logger.error(err_msg)
-                if tries == 3:
-                    logger.error("(Future repeats of this error hidden to avoid spam.)")
-                time.sleep(5)
-            else: break
-        if tries > 3: logger.error("Failed to get historical candle data {} times.".format(tries - 1))
-        return candles
 
     def limit_buy(self, amt, pt):
         try:
@@ -951,7 +958,7 @@ class Instance:
     def ping(self):
         # check if its time for a new candle
         if (1000 * time.time() - self.candles_raw[-1]["ts_end"]) < 60000: return
-        candles = self.get_historical_candles(self.asset, self.base, 1, 2)
+        candles = client.get_historical_candles(self.asset, self.base, 2)
 
         # New raw candle?
         if candles[0]["ts_end"] != self.candles_raw[-1]["ts_end"]:
