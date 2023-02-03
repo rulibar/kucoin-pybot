@@ -181,7 +181,7 @@ class Exchange:
                     continue
                 d_obj = dict()
                 d_obj['asset'] = deposit['asset']
-                d_obj['amt'] = deposit['amount']
+                d_obj['amt'] = float(deposit['amount'])
                 d_obj['fee'] = 0.0
                 if id not in self.deposits_pending.keys():
                     if deposit['insertTime'] > ts_last: d_complete.append(d_obj)
@@ -195,8 +195,8 @@ class Exchange:
                     continue
                 w_obj = dict()
                 w_obj['asset'] = withdrawal['asset']
-                w_obj['amt'] = withdrawal['amount']
-                w_obj['fee'] = withdrawal['transactionFee']
+                w_obj['amt'] = float(withdrawal['amount'])
+                w_obj['fee'] = float(withdrawal['transactionFee'])
                 if id not in self.withdrawals_pending.keys():
                     if withdrawal['applyTime'] > ts_last: w_complete.append(w_obj)
                     continue
@@ -221,7 +221,7 @@ class Exchange:
                 if item_asset not in {asset, base}: continue
                 item_obj = dict()
                 item_obj['asset'] = item_asset
-                item_obj['amt'] = item['amount']
+                item_obj['amt'] = float(item['amount'])
                 item_obj['fee'] = 0.0
                 if item['direction'] == 'in': d_complete.append(item_obj)
                 if item['direction'] == 'out': w_complete.append(item_obj)
@@ -339,7 +339,7 @@ class Exchange:
                     time.sleep(5)
                 else: break
             if tries > 3: logger.error("Failed to get historical candle data {} times.".format(tries - 1))
-            end_time = int(time.time())
+            ts_data_end = int(time.time())
 
             for i in range(len(candles)):
                 candle = candles[i]
@@ -352,12 +352,57 @@ class Exchange:
                     "volume": round(float(candle[7]), 8),
                     "ts_end": int(candle[6])})
 
-            if data[-1]['ts_end'] > end_time: data.pop()
+            if data[-1]['ts_end'] > ts_data_end: data.pop()
             data = data[-n_candles:]
         elif self.name == "kucoin":
-            logger.error(f"Error: Unsupported exchange '{exchange}'."); exit()
-            #pair = f'{asset}-{base}'
-            #interval_str = '1min'
+            #logger.error(f"Error: Unsupported exchange '{exchange}'."); exit()
+            pair = f'{asset}-{base}'
+            #ts_start = int(time.time())
+            ts_data_start = int(time.time() - 1500*60)
+
+            # Find the latest candles with volume
+            klines = list()
+            while len(klines) == 0:
+                ts_data_end = int(time.time())
+                try: klines = self.client.get_kline_data(symbol = pair, kline_type = "1min", start = ts_data_start)
+                except Exception as e:
+                    logger.error(f"Error grabbing klines!\n    {e}\nSleeping for 1s and trying again...")
+                    time.sleep(1)
+                    continue
+                ts_data_start = int(ts_data_start - 1500*60)
+
+            # remove the latest candle if it is dynamic
+            if int(klines[0][0]) + 60 > ts_data_end: klines = klines[1:]
+
+            # fill in missing candles with zero volume candles
+            candles = list(klines)
+            while int(candles[0][0]) + 2*60 < ts_data_end:
+                candles = [[str(int(candles[0][0]) + 60), candles[0][1], candles[0][2], candles[0][3], candles[0][4], '0', '0']] + candles
+
+            # get enough candles to fulfill the request
+            while len(candles) < n_candles:
+                ts_data_start = int(candles[-1][0]) - 1500*60
+                try: klines = self.client.get_kline_data(symbol = pair, kline_type = "1min", start = ts_data_start, end = candles[-1][0])
+                except Exception as e:
+                    logger.error(f"Error grabbing klines!\n    {e}\nSleeping for 1s and trying again...")
+                    time.sleep(1)
+                    continue
+                candles = candles + klines
+
+            # Put the list in the desired format
+            candles = candles[::-1]
+            candles = candles[-n_candles:]
+
+            for i in range(len(candles)):
+                candle = candles[i]
+                data.append({
+                    "ts_start": int(candle[0]) * 1000,
+                    "open": round(float(candle[1]), 8),
+                    "high": round(float(candle[3]), 8),
+                    "low": round(float(candle[4]), 8),
+                    "close": round(float(candle[2]), 8),
+                    "volume": round(float(candle[6]), 8),
+                    "ts_end": (int(candle[0]) + 60) * 1000 - 1})
 
         return data
 
@@ -433,8 +478,6 @@ class Instance:
         self.topoff_candles_raw()
         self.candles = self._get_candles()
         self.topoff_candles()
-        #self.candles_raw = shrink_list(self.candles_raw, 2 * self.interval)
-        #self.candles_raw_unused = self._get_raw_unused()
 
         self.candle_start = None
         self.positions_start = None
@@ -687,6 +730,7 @@ class Instance:
             if order == 0:
                 candle_new['close'] = candle_raw['close']
                 candle_new['ts_end'] = candle_raw['ts_end']
+                candle_new['volume'] = round(candle_new['volume'], 8)
                 self.candles.append(candle_new)
                 candle_new = dict()
                 n_new += 1
