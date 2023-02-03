@@ -1,5 +1,5 @@
 """
-Kucoin Pybot v1.1 (23-2-2)
+Kucoin Pybot v1.1 (23-2-3)
 https://github.com/rulibar/kucoin-pybot
 
 Warning: Not yet working.
@@ -321,7 +321,7 @@ class Exchange:
 
         if self.name == "binance":
             pair = f'{asset}{base}'
-            start_str = f"{n_candles} minutes ago UTC"
+            start_str = f"{n_candles + 5} minutes ago UTC"
 
             tries = 0
             while True:
@@ -339,6 +339,7 @@ class Exchange:
                     time.sleep(5)
                 else: break
             if tries > 3: logger.error("Failed to get historical candle data {} times.".format(tries - 1))
+            end_time = int(time.time())
 
             for i in range(len(candles)):
                 candle = candles[i]
@@ -348,8 +349,11 @@ class Exchange:
                     "high": round(float(candle[2]), 8),
                     "low": round(float(candle[3]), 8),
                     "close": round(float(candle[4]), 8),
-                    "volume": round(float(candle[5]), 8),
+                    "volume": round(float(candle[7]), 8),
                     "ts_end": int(candle[6])})
+
+            if data[-1]['ts_end'] > end_time: data.pop()
+            data = data[-n_candles:]
         elif self.name == "kucoin":
             logger.error(f"Error: Unsupported exchange '{exchange}'."); exit()
             #pair = f'{asset}-{base}'
@@ -424,10 +428,13 @@ class Instance:
         logger.info("New trader instance started on {} {} {}m.".format(self.exchange.title(), self.pair, self.interval))
         self.get_params()
 
-        self.candles_raw = self._get_candles_raw()
+        self.candles_raw = client.get_historical_candles(self.asset, self.base, 600 * self.interval)
+        self.candles_raw_unused = 0
+        self.topoff_candles_raw()
         self.candles = self._get_candles()
-        self.candles_raw = shrink_list(self.candles_raw, 2 * self.interval)
-        self.candles_raw_unused = self._get_raw_unused()
+        self.topoff_candles()
+        #self.candles_raw = shrink_list(self.candles_raw, 2 * self.interval)
+        #self.candles_raw_unused = self._get_raw_unused()
 
         self.candle_start = None
         self.positions_start = None
@@ -441,20 +448,6 @@ class Instance:
         self.signal = {"rinTarget": p.rinT, "rinTargetLast": p.rinT, "position": "none", "status": 0, "apc": p.price, "target": p.price, "stop": p.price}
         self.performance = {"bh": 0, "change": 0, "W": 0, "L": 0, "wSum": 0, "lSum": 0, "w": 0, "l": 0, "be": 0, "aProfits": 0, "bProfits": 0, "cProfits": 0}
         self.init(p)
-
-    def _get_candles_raw(self):
-        # get enough 1m candles to create 600 historical candles
-        candles_raw = client.get_historical_candles(self.asset, self.base, 600 * self.interval)
-        candles_raw.pop()
-        #top_off = client.get_historical_candles(self.asset, self.base, 100)
-        #for i in range(len(top_off)):
-        #    if top_off[-1]['ts_end'] == candles_raw[-1]['ts_end']: candles_raw.pop(); break
-        #    elif top_off[i]['ts_end'] < candles_raw[-1]['ts_end']: continue
-        #    elif top_off[i]['ts_end'] == candles_raw[-1]['ts_end']: candles_raw[-1] = top_off[i]
-        #    elif i == len(top_off) - 1: continue
-        #    else: candles_raw.append(top_off[i])
-
-        return candles_raw
 
     def _get_candles(self):
         # convert historical 1m candles into historical candles
@@ -480,20 +473,9 @@ class Instance:
                 candle_new["ts_start"] = candle_raw["ts_start"]
                 candles.append(candle_new)
 
+        self.candles_raw = self.candles_raw[-2*self.interval:]
+
         return candles[::-1]
-
-    def _get_raw_unused(self):
-        # get unused historical 1m candles
-        raw_unused = -1
-        #str_out = str()
-        candles_raw = self.candles_raw[-2 * self.interval:]
-        for i in range(len(candles_raw)):
-            candle_raw = candles_raw[i]
-            if candle_raw["ts_end"] == self.candles[-1]["ts_end"]: raw_unused += 1
-            elif raw_unused > -1: raw_unused += 1
-            #if raw_unused > 0: str_out += "    {}\n".format(candle_raw)
-
-        return raw_unused
 
     def limit_buy(self, amt, pt):
         try:
@@ -654,28 +636,65 @@ class Instance:
                 logger.info("    \"{}\": {} -> {}".format(key, self.params[key], params[key]))
                 self.params[key] = params[key]
 
-    def get_new_candle(self):
-        # Create a new candle from 1m candles
-        candle_new = dict()
-        for i in range(self.interval):
-            candle_raw = self.candles_raw[-1 - i]
+    def topoff_candles_raw(self):
+        # check if there are new raw candles..
+        # add the new raw candles..
+        # return the number of new raw candles
+        n_new = 0
 
-            if i == 0:
+        topoff = client.get_historical_candles(self.asset, self.base, 120)
+        for i in range(len(topoff)):
+            if topoff[-1]['ts_end'] == self.candles_raw[-1]['ts_end']: break
+            elif topoff[i]['ts_end'] <= self.candles_raw[-1]['ts_end']: continue
+            else: self.candles_raw.append(topoff[i]); n_new += 1
+
+        return n_new
+
+    def topoff_candles(self):
+        # check if there are enough raw candles to create new candles..
+        # add the new candles..
+        # return the number of new candles
+        n_new = 0
+        raw_unused = 0
+
+        for i in range(len(self.candles_raw)):
+            candle_raw = self.candles_raw[i]
+            if candle_raw['ts_end'] <= self.candles[-1]['ts_end']: continue
+            else: raw_unused += 1
+
+        self.candles_raw_unused = raw_unused % self.interval
+        if raw_unused < self.interval: return 0
+
+        candles_raw_clone = list(self.candles_raw)
+        if self.candles_raw_unused == 0: candles_raw_clone = candles_raw_clone[-raw_unused:]
+        else: candles_raw_clone = candles_raw_clone[-raw_unused:-self.candles_raw_unused]
+
+        candle_new = dict()
+        for i in range(len(candles_raw_clone)):
+            candle_raw = candles_raw_clone[i]
+            order = (i + 1) % self.interval
+
+            if order == 1:
                 candle_new = candle_raw
                 continue
 
-            if candle_raw["high"] > candle_new["high"]:
-                candle_new["high"] = candle_raw["high"]
-            if candle_raw["low"] < candle_new["low"]:
-                candle_new["low"] = candle_raw["low"]
-            candle_new["volume"] += candle_raw["volume"]
+            if candle_raw['high'] > candle_new['high']:
+                candle_new['high'] = candle_raw['high']
+            if candle_raw['low'] < candle_new['low']:
+                candle_new['low'] = candle_raw['low']
+            candle_new['volume'] += candle_raw['volume']
 
-            if i == self.interval - 1:
-                candle_new["open"] = candle_raw["open"]
-                candle_new["ts_start"] = candle_raw["ts_start"]
+            if order == 0:
+                candle_new['close'] = candle_raw['close']
+                candle_new['ts_end'] = candle_raw['ts_end']
                 self.candles.append(candle_new)
-                self.candles_raw_unused = 0
-                self.candles = shrink_list(self.candles, 5000)
+                candle_new = dict()
+                n_new += 1
+
+        if len(self.candles_raw) > 2*self.interval: self.candles_raw = self.candles_raw[-2*self.interval:]
+        if len(self.candles) > 5000: self.candles = self.candles[-5000:]
+
+        return n_new
 
     def get_positions(self):
         try: positions = client.get_account(self.asset, self.base)
@@ -956,24 +975,18 @@ class Instance:
                 s['rinTarget'] += 1 / num_sigs
 
     def ping(self):
-        # check if its time for a new candle
+        # check if its time for a new tick
         if (1000 * time.time() - self.candles_raw[-1]["ts_end"]) < 60000: return
-        candles = client.get_historical_candles(self.asset, self.base, 2)
+        n_new_candles_raw = self.topoff_candles_raw()
+        n_new_candles = self.topoff_candles()
 
-        # New raw candle?
-        if candles[0]["ts_end"] != self.candles_raw[-1]["ts_end"]:
-            self.candles_raw_unused += 1
-            self.candles_raw.append(candles[0])
-            self.candles_raw = self.candles_raw[-2 * self.interval:]
-
-        # New candle?
-        if self.candles_raw_unused == self.interval:
+        # New tick?
+        if n_new_candles > 0:
             # Preliminary setup
             set_log_file()
             self.close_orders()
             self.update_vars()
             self.get_params()
-            self.get_new_candle()
 
             self.positions_last = {key: value[:] for key, value in self.positions.items()}
             self.positions = self.get_positions()
