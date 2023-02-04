@@ -1,5 +1,5 @@
 """
-Kucoin Pybot v1.1 (23-2-3)
+Kucoin Pybot v1.1 (23-2-4)
 https://github.com/rulibar/kucoin-pybot
 
 Warning: Not yet working.
@@ -75,7 +75,6 @@ class Exchange:
         else: logger.error(f"Error: Unsupported exchange '{exchange}'."); exit()
 
         # Exchange vars
-        #self.first_tick = True
         self.positions_init_ts = 0
         self.last_acc_check = 0
         self.last_acc_check_cache = 0
@@ -113,7 +112,6 @@ class Exchange:
                 if acc_asset == asset: data['asset'][1] = total
                 if acc_asset == base: data['base'][1] = total
         elif self.name == "kucoin":
-            #logger.error(f"Error: Unsupported exchange '{exchange}'."); exit()
             acc = self.client.get_accounts()
             self.last_acc_check = int(1000 * time.time())
             for i in range(len(acc)):
@@ -135,7 +133,6 @@ class Exchange:
             start_time = int(ts_last)
             for dep in self.deposits_pending: start_time = min([start_time, self.deposits_pending[dep] - 1000])
             for wit in self.withdrawals_pending: start_time = min([start_time, self.withdrawals_pending[wit] - 1000])
-            #if self.first_tick: start_time -= 24 * 60 * 60 * 1000
             if start_time == self.positions_init_ts: start_time -= 24 * 60 * 60 * 1000
 
             deposits = self.client.get_deposit_history(startTime = start_time)
@@ -206,7 +203,6 @@ class Exchange:
             data.append(d_complete)
             data.append(w_complete)
         elif self.name == "kucoin":
-            #logger.error(f"Error: Unsupported exchange '{exchange}'."); exit()
             account_activity = self.client.get_account_activity()['items']
             d_complete = list()
             w_complete = list()
@@ -245,12 +241,10 @@ class Exchange:
                 tr['amt_base'] = trade['quoteQty']
                 tr['amt_fee'] = trade['commission']
                 tr['fee_currency'] = trade['commissionAsset']
-                #tr['price'] = trade['price']
                 tr['side'] = 'sell'
                 if trade['isBuyer']: tr['side'] = 'buy'
                 data.append(tr)
         elif self.name == "kucoin":
-            #logger.error(f"Error: Unsupported exchange '{exchange}'."); exit()
             account_activity = self.client.get_account_activity()['items']
             trades = dict()
             account_activity = [item for item in account_activity if item['accountType'] == 'TRADE']
@@ -305,7 +299,6 @@ class Exchange:
             data['asset_precision'] = pair_info[2]['stepSize']
             data['price_precision'] = pair_info[0]['tickSize']
         elif self.name == "kucoin":
-            #logger.error(f"Error: Unsupported exchange '{exchange}'."); exit()
             pair = f'{asset}-{base}'
             pair_info = self.client.get_symbols()
             pair_info = [item for item in pair_info if item['name'] == pair][0]
@@ -355,44 +348,41 @@ class Exchange:
             if data[-1]['ts_end'] > ts_data_end: data.pop()
             data = data[-n_candles:]
         elif self.name == "kucoin":
-            #logger.error(f"Error: Unsupported exchange '{exchange}'."); exit()
             pair = f'{asset}-{base}'
-            #ts_start = int(time.time())
             ts_data_start = int(time.time() - 1500*60)
 
             # Find the latest candles with volume
             klines = list()
             while len(klines) == 0:
-                ts_data_end = int(time.time())
                 try: klines = self.client.get_kline_data(symbol = pair, kline_type = "1min", start = ts_data_start)
-                except Exception as e:
-                    logger.error(f"Error grabbing klines!\n    {e}\nSleeping for 1s and trying again...")
-                    time.sleep(1)
+                except Exception as err:
+                    err_msg = "Error getting historical candle data. Retrying in 5 seconds..."
+                    if err != "": err_msg += "\n'{}'".format(err)
+                    logger.error(err_msg)
+                    time.sleep(5)
                     continue
+                ts_data_end = int(time.time())
                 ts_data_start = int(ts_data_start - 1500*60)
-
-            # remove the latest candle if it is dynamic
-            if int(klines[0][0]) + 60 > ts_data_end: klines = klines[1:]
 
             # fill in missing candles with zero volume candles
             candles = list(klines)
-            while int(candles[0][0]) + 2*60 < ts_data_end:
+            while int(candles[0][0]) + 60 < ts_data_end:
                 candles = [[str(int(candles[0][0]) + 60), candles[0][1], candles[0][2], candles[0][3], candles[0][4], '0', '0']] + candles
 
             # get enough candles to fulfill the request
-            while len(candles) < n_candles:
+            while len(candles) < n_candles + 5:
                 ts_data_start = int(candles[-1][0]) - 1500*60
                 try: klines = self.client.get_kline_data(symbol = pair, kline_type = "1min", start = ts_data_start, end = candles[-1][0])
-                except Exception as e:
-                    logger.error(f"Error grabbing klines!\n    {e}\nSleeping for 1s and trying again...")
-                    time.sleep(1)
+                except Exception as err:
+                    err_msg = "Error getting historical candle data. Retrying in 5 seconds..."
+                    if err != "": err_msg += "\n'{}'".format(err)
+                    logger.error(err_msg)
+                    time.sleep(5)
                     continue
                 candles = candles + klines
 
             # Put the list in the desired format
             candles = candles[::-1]
-            candles = candles[-n_candles:]
-
             for i in range(len(candles)):
                 candle = candles[i]
                 data.append({
@@ -404,6 +394,9 @@ class Exchange:
                     "volume": round(float(candle[6]), 8),
                     "ts_end": (int(candle[0]) + 60) * 1000 - 1})
 
+            if data[-1]['ts_end'] > 1000 * ts_data_end: data.pop()
+            data = data[-n_candles:]
+
         return data
 
     def get_open_orders(self, asset, base):
@@ -414,7 +407,6 @@ class Exchange:
             open_orders = self.client.get_open_orders(symbol = pair)
             data = [{"order_id": order["orderId"]} for order in open_orders]
         elif self.name == "kucoin":
-            #logger.error(f"Error: Unsupported exchange '{exchange}'."); exit()
             pair = f'{asset}-{base}'
             open_orders = self.client.get_orders(symbol = pair, status = 'active')['items']
             data = [{"order_id": order["id"]} for order in open_orders]
@@ -426,7 +418,6 @@ class Exchange:
             pair = f'{asset}{base}'
             self.client.cancel_order(symbol = pair, orderId = order_id)
         elif self.name == "kucoin":
-            #ogger.error(f"Error: Unsupported exchange '{exchange}'."); exit()
             self.client.cancel_order(order_id)
 
     def order_limit_buy(self, asset, base, amt, pt):
@@ -434,7 +425,6 @@ class Exchange:
             pair = f'{asset}{base}'
             self.client.order_limit_buy(symbol = pair, quantity = "{:.8f}".format(amt), price = "{:.8f}".format(pt))
         elif self.name == "kucoin":
-            #logger.error(f"Error: Unsupported exchange '{exchange}'."); exit()
             pair = f'{asset}-{base}'
             self.client.create_limit_order(symbol = pair, size = "{:.8f}".format(amt), price = "{:.8f}".format(pt), side = 'buy')
 
@@ -443,7 +433,6 @@ class Exchange:
             pair = f'{asset}{base}'
             self.client.order_limit_sell(symbol = pair, quantity = "{:.8f}".format(amt), price = "{:.8f}".format(pt))
         elif self.name == "kucoin":
-            #logger.error(f"Error: Unsupported exchange '{exchange}'."); exit()
             pair = f'{asset}-{base}'
             self.client.create_limit_order(symbol = pair, size = "{:.8f}".format(amt), price = "{:.8f}".format(pt), side = 'sell')
 
@@ -499,10 +488,10 @@ class Instance:
         for i in range(self.interval-2): candles_raw_clone.pop()
         for i in range(len(candles_raw_clone)):
             order = i % self.interval
-            candle_raw = candles_raw_clone[-1 - i]
+            candle_raw = dict(candles_raw_clone[-1 - i])
 
             if order == 0:
-                candle_new = candle_raw
+                candle_new = dict(candle_raw)
                 continue
 
             if candle_raw["high"] > candle_new["high"]:
@@ -517,7 +506,6 @@ class Instance:
                 candles.append(candle_new)
 
         self.candles_raw = self.candles_raw[-2*self.interval:]
-
         return candles[::-1]
 
     def limit_buy(self, amt, pt):
@@ -525,16 +513,16 @@ class Instance:
             logger.warning("Trying to buy {} {} for {} {}. (price: {})".format(fix_dec(amt), self.asset, fix_dec(round(amt * pt, self.pt_dec)), self.base, fix_dec(pt)))
             self.last_order = {"type": "buy", "amt": amt, "pt": pt}
             client.order_limit_buy(self.asset, self.base, amt, pt)
-        except Exception as e:
-            logger.error("Error buying.\n'{}'".format(e))
+        except Exception as err:
+            logger.error("Error buying.\n'{}'".format(err))
 
     def limit_sell(self, amt, pt):
         try:
             logger.warning("Trying to sell {} {} for {} {}. (price: {})".format(fix_dec(amt), self.asset, fix_dec(round(amt * pt, self.pt_dec)), self.base, fix_dec(pt)))
             self.last_order = {"type": "sell", "amt": amt, "pt": pt}
             client.order_limit_sell(self.asset, self.base, amt, pt)
-        except Exception as e:
-            logger.error("Error selling.\n'{}'".format(e))
+        except Exception as err:
+            logger.error("Error selling.\n'{}'".format(err))
 
     def bso(self, p):
         # buy/sell/other
@@ -569,18 +557,17 @@ class Instance:
         try:
             orders = client.get_open_orders(self.asset, self.base)
             for order in orders: client.cancel_order(self.asset, self.base, order['order_id'])
-        except Exception as e:
-            logger.error("Error closing open orders.\n'{}'".format(e))
+        except Exception as err:
+            logger.error("Error closing open orders.\n'{}'".format(err))
 
     def update_vars(self):
         # Get preliminary vars
         self.ticks += 1
         self.days = (self.ticks - 1) * self.interval / (60 * 24)
-        #if self.ticks == 2: client.first_tick = False
 
         try: pair_info = client.get_pair_info(self.asset, self.base)
-        except Exception as e:
-            logger.error("Error getting pair info.\n'{}'".format(e))
+        except Exception as err:
+            logger.error("Error getting pair info.\n'{}'".format(err))
             return
 
         min_order = float(pair_info['asset_min_qty']) * self.candles[-1]['close']
@@ -714,11 +701,11 @@ class Instance:
 
         candle_new = dict()
         for i in range(len(candles_raw_clone)):
-            candle_raw = candles_raw_clone[i]
+            candle_raw = dict(candles_raw_clone[i])
             order = (i + 1) % self.interval
 
             if order == 1:
-                candle_new = candle_raw
+                candle_new = dict(candle_raw)
                 continue
 
             if candle_raw['high'] > candle_new['high']:
@@ -742,8 +729,8 @@ class Instance:
 
     def get_positions(self):
         try: positions = client.get_account(self.asset, self.base)
-        except Exception as e:
-            logger.error("Error getting account balances.\n'{}'".format(e))
+        except Exception as err:
+            logger.error("Error getting account balances.\n'{}'".format(err))
             return self.positions
 
         return positions
@@ -785,8 +772,8 @@ class Instance:
 
         try:
             deposits, withdrawals = client.get_dws(self.asset, self.base)
-        except Exception as e:
-            logger.error("Error getting deposits and withdrawals.\n'{}'".format(e))
+        except Exception as err:
+            logger.error("Error getting deposits and withdrawals.\n'{}'".format(err))
             return 0, 0
 
         for deposit in deposits:
@@ -817,8 +804,8 @@ class Instance:
 
         # Get trades
         try: trades = client.get_trades(self.asset, self.base, 20)
-        except Exception as e:
-            logger.error("Error getting trade info.\n'{}'".format(e))
+        except Exception as err:
+            logger.error("Error getting trade info.\n'{}'".format(err))
             return 0, 0, p.price
 
         # process trades
@@ -886,7 +873,7 @@ class Instance:
             if diffbase_unkn > 0: logger.info("{} {} has become available.".format(fix_dec(diffbase_unkn), self.base))
             elif diffbase_unkn < 0: logger.info("{} {} has become unavailable.".format(fix_dec(-diffbase_unkn), self.base))
 
-        # set position and apc
+        # set position and average price
         if apc == 0: apc = p.price
         if p.positionValue > self.min_order:
             if s['position'] != "long":
