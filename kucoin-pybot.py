@@ -1,5 +1,5 @@
 """
-Kucoin Pybot v1.1 (23-2-4)
+Kucoin Pybot v1.1 (23-2-5)
 https://github.com/rulibar/kucoin-pybot
 
 Warning: Not yet working.
@@ -115,6 +115,7 @@ class Exchange:
             acc = self.client.get_accounts()
             self.last_acc_check = int(1000 * time.time())
             for i in range(len(acc)):
+                if acc[i]['type'] != 'trade': continue
                 acc_asset = self.tickers[acc[i]["currency"]]
                 if acc_asset not in {asset, base}: continue
                 free = float(acc[i]["available"])
@@ -268,6 +269,8 @@ class Exchange:
                     trades[id]['amt_base'] += float(item['amount'])
                     trades[id]['amt_fee'] += float(item['fee'])
                     trades[id]['fee_currency'] = base
+                    if item['direction'] == 'in': trades[id]['amt_base'] += float(item['fee'])
+                    if item['direction'] == 'out': trades[id]['amt_base'] -= float(item['fee'])
                 elif item_asset == asset:
                     trades[id]['amt_asset'] += float(item['amount'])
                     if item['direction'] == 'out': trades[id]['side'] = 'sell'
@@ -281,6 +284,8 @@ class Exchange:
                     trades[id]['amt_fee'] = float(item['amount'])
                     trades[id]['fee_currency'] = item_asset
             for id in trades:
+                if trades[id]['amt_asset'] == 0: continue
+                if trades[id]['amt_base'] == 0: continue
                 for key in trades[id]:
                     if key in {'fee_currency', 'side'}: continue
                     trades[id][key] = f"{trades[id][key]:.8f}"
@@ -348,6 +353,8 @@ class Exchange:
             if data[-1]['ts_end'] > ts_data_end: data.pop()
             data = data[-n_candles:]
         elif self.name == "kucoin":
+            for key in self.tickers:
+                if self.tickers[key] == asset: asset = key
             pair = f'{asset}-{base}'
             ts_data_start = int(time.time() - 1500*60)
 
@@ -407,6 +414,8 @@ class Exchange:
             open_orders = self.client.get_open_orders(symbol = pair)
             data = [{"order_id": order["orderId"]} for order in open_orders]
         elif self.name == "kucoin":
+            for key in self.tickers:
+                if self.tickers[key] == asset: asset = key
             pair = f'{asset}-{base}'
             open_orders = self.client.get_orders(symbol = pair, status = 'active')['items']
             data = [{"order_id": order["id"]} for order in open_orders]
@@ -425,6 +434,8 @@ class Exchange:
             pair = f'{asset}{base}'
             self.client.order_limit_buy(symbol = pair, quantity = "{:.8f}".format(amt), price = "{:.8f}".format(pt))
         elif self.name == "kucoin":
+            for key in self.tickers:
+                if self.tickers[key] == asset: asset = key
             pair = f'{asset}-{base}'
             self.client.create_limit_order(symbol = pair, size = "{:.8f}".format(amt), price = "{:.8f}".format(pt), side = 'buy')
 
@@ -433,6 +444,8 @@ class Exchange:
             pair = f'{asset}{base}'
             self.client.order_limit_sell(symbol = pair, quantity = "{:.8f}".format(amt), price = "{:.8f}".format(pt))
         elif self.name == "kucoin":
+            for key in self.tickers:
+                if self.tickers[key] == asset: asset = key
             pair = f'{asset}-{base}'
             self.client.create_limit_order(symbol = pair, size = "{:.8f}".format(amt), price = "{:.8f}".format(pt), side = 'sell')
 
@@ -444,8 +457,8 @@ class Portfolio:
         self.price = candle['close']
         self.positionValue = self.price * self.asset
         self.size = self.base + self.positionValue
-        self.funds = funds
-        if funds > self.size or funds == 0: self.funds = float(self.size)
+        self.funds = float(funds)
+        if self.funds > self.size or self.funds == 0: self.funds = float(self.size)
         self.sizeT = float(self.funds)
         self.rin = self.price * self.asset / self.size
         self.rinT = self.price * self.asset / self.sizeT
@@ -464,7 +477,7 @@ class Instance:
 
         self.candles_raw = client.get_historical_candles(self.asset, self.base, 600 * self.interval)
         self.candles_raw_unused = 0
-        self.topoff_candles_raw()
+        if (time.time() - self.candles_raw[-1]["ts_end"]/1000) > 60: self.topoff_candles_raw()
         self.candles = self._get_candles()
         self.topoff_candles()
 
@@ -475,7 +488,7 @@ class Instance:
         self.positions_f['base'] = list(self.positions['base'])
         self.positions_t = {'asset': list(self.positions['asset'])}
         self.positions_t['base'] = list(self.positions['base'])
-        p = Portfolio(self.candles[-1], self.positions, float(self.params['funds']))
+        p = Portfolio(self.candles[-1], self.positions, self.params['funds'])
         self.last_order = {"type": "none", "amt": 0, "pt": self.candles[-1]['close']}
         self.signal = {"rinTarget": p.rinT, "rinTargetLast": p.rinT, "position": "none", "status": 0, "apc": p.price, "target": p.price, "stop": p.price}
         self.performance = {"bh": 0, "change": 0, "W": 0, "L": 0, "wSum": 0, "lSum": 0, "w": 0, "l": 0, "be": 0, "aProfits": 0, "bProfits": 0, "cProfits": 0}
@@ -1007,7 +1020,7 @@ class Instance:
 
     def ping(self):
         # check if its time for a new tick
-        if (1000 * time.time() - self.candles_raw[-1]["ts_end"]) < 60000: return
+        if (time.time() - self.candles_raw[-1]["ts_end"]/1000) < 60: return
         n_new_candles_raw = self.topoff_candles_raw()
         n_new_candles = self.topoff_candles()
 
@@ -1021,7 +1034,8 @@ class Instance:
 
             self.positions_last = {key: value[:] for key, value in self.positions.items()}
             self.positions = self.get_positions()
-            p = Portfolio(self.candles[-1], self.positions, float(self.params['funds']))
+            p = Portfolio(self.candles[-1], self.positions, self.params['funds'])
+            self.min_order = max(self.min_order, round(0.05*p.funds, 8))
             self.process_dwts(p)
             self.get_performance(p)
 
