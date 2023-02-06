@@ -1,8 +1,6 @@
 """
 Kucoin Pybot v1.1 (23-2-6)
 https://github.com/rulibar/kucoin-pybot
-
-Warning: Not yet working.
 """
 
 import os
