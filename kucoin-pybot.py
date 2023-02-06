@@ -1,5 +1,5 @@
 """
-Kucoin Pybot v1.1 (23-2-5)
+Kucoin Pybot v1.1 (23-2-6)
 https://github.com/rulibar/kucoin-pybot
 
 Warning: Not yet working.
@@ -84,12 +84,14 @@ class Exchange:
         self.withdrawals_pending = dict()
 
         # KuCoin vars
+        self.coins = dict()
         self.tickers = dict()
         if self.name == "kucoin":
             currencies = self.client.get_currencies()
             for i in range(len(currencies)):
                 coin_name = currencies[i]['currency']
                 coin_ticker = currencies[i]['name']
+                self.coins[coin_ticker] = coin_name
                 self.tickers[coin_name] = coin_ticker
 
     def get_account(self, asset, base):
@@ -314,6 +316,18 @@ class Exchange:
 
         return data
 
+    def get_candles_err(self, sleep_time, attempts, err):
+        if attempts == 11:
+            sleep_time = 300
+            logger.error(f"Too many failed attempts... Setting the sleep time to {sleep_time} seconds...")
+        elif attempts >= 100:
+            logger.error(f"Too many failed attempts... Shutting down the bot.")
+            exit()
+        err_msg = f"Error getting historical candle data. Retrying in {sleep_time} seconds..."
+        if err != "": err_msg += "\n'{}'".format(err)
+        logger.error(err_msg)
+        return sleep_time
+
     def get_historical_candles(self, asset, base, n_candles):
         data = list()
 
@@ -321,22 +335,18 @@ class Exchange:
             pair = f'{asset}{base}'
             start_str = f"{n_candles + 5} minutes ago UTC"
 
-            tries = 0
+            attempts = 0
+            sleep_time = 5
             while True:
                 candles, err = list(), str()
                 try: candles = self.client.get_historical_klines(pair, "1m", start_str)
-                except Exception as e: err = e
-                tries += 1
-                if len(candles) == 0:
-                    if tries <= 3:
-                        err_msg = "Error getting historical candle data. Retrying in 5 seconds..."
-                        if err != "": err_msg += "\n'{}'".format(err)
-                        logger.error(err_msg)
-                    if tries == 3:
-                        logger.error("(Future repeats of this error hidden to avoid spam.)")
-                    time.sleep(5)
+                except Exception as exc: err = exc
+                attempts += 1
+                if err != "":
+                    sleep_time = self.get_candles_err(sleep_time, attempts, err)
+                    time.sleep(sleep_time)
                 else: break
-            if tries > 3: logger.error("Failed to get historical candle data {} times.".format(tries - 1))
+            if attempts >= 5: logger.error("Failed to get historical candle data {} times.".format(attempts - 1))
             ts_data_end = int(time.time())
 
             for i in range(len(candles)):
@@ -353,39 +363,47 @@ class Exchange:
             if data[-1]['ts_end'] > ts_data_end: data.pop()
             data = data[-n_candles:]
         elif self.name == "kucoin":
-            for key in self.tickers:
-                if self.tickers[key] == asset: asset = key
+            asset = self.coins[asset]
             pair = f'{asset}-{base}'
             ts_data_start = int(time.time() - 1500*60)
 
             # Find the latest candles with volume
-            klines = list()
-            while len(klines) == 0:
+            attempts = 0
+            sleep_time = 5
+            while True:
+                klines, err = list(), str()
                 try: klines = self.client.get_kline_data(symbol = pair, kline_type = "1min", start = ts_data_start)
-                except Exception as err:
-                    err_msg = "Error getting historical candle data. Retrying in 5 seconds..."
-                    if err != "": err_msg += "\n'{}'".format(err)
-                    logger.error(err_msg)
-                    time.sleep(5)
-                    continue
-                ts_data_end = int(time.time())
-                ts_data_start = int(ts_data_start - 1500*60)
+                except Exception as exc: err = exc
+                attempts += 1
+                if err != "":
+                    sleep_time = self.get_candles_err(sleep_time, attempts, err)
+                    time.sleep(sleep_time)
+                else: break
+            if attempts >= 5: logger.error("Failed to get historical candle data {} times.".format(attempts - 1))
+            ts_data_end = int(time.time())
+            ts_data_start = int(ts_data_start - 1500*60)
 
             # fill in missing candles with zero volume candles
             candles = list(klines)
             while int(candles[0][0]) + 60 < ts_data_end:
-                candles = [[str(int(candles[0][0]) + 60), candles[0][1], candles[0][2], candles[0][3], candles[0][4], '0', '0']] + candles
+                candles = [[str(int(candles[0][0]) + 60), candles[0][4], candles[0][4], candles[0][4], candles[0][4], '0', '0']] + candles
 
             # get enough candles to fulfill the request
             while len(candles) < n_candles + 5:
                 ts_data_start = int(candles[-1][0]) - 1500*60
-                try: klines = self.client.get_kline_data(symbol = pair, kline_type = "1min", start = ts_data_start, end = candles[-1][0])
-                except Exception as err:
-                    err_msg = "Error getting historical candle data. Retrying in 5 seconds..."
-                    if err != "": err_msg += "\n'{}'".format(err)
-                    logger.error(err_msg)
-                    time.sleep(5)
-                    continue
+
+                attempts = 0
+                sleep_time = 5
+                while True:
+                    klines, err = list(), str()
+                    try: klines = self.client.get_kline_data(symbol = pair, kline_type = "1min", start = ts_data_start, end = candles[-1][0])
+                    except Exception as exc: err = exc
+                    attempts += 1
+                    if err != "":
+                        sleep_time = self.get_candles_err(sleep_time, attempts, err)
+                        time.sleep(sleep_time)
+                    else: break
+                if attempts >= 5: logger.error("Failed to get historical candle data {} times.".format(attempts - 1))
                 candles = candles + klines
 
             # Put the list in the desired format
@@ -414,8 +432,7 @@ class Exchange:
             open_orders = self.client.get_open_orders(symbol = pair)
             data = [{"order_id": order["orderId"]} for order in open_orders]
         elif self.name == "kucoin":
-            for key in self.tickers:
-                if self.tickers[key] == asset: asset = key
+            asset = self.coins[asset]
             pair = f'{asset}-{base}'
             open_orders = self.client.get_orders(symbol = pair, status = 'active')['items']
             data = [{"order_id": order["id"]} for order in open_orders]
@@ -434,8 +451,7 @@ class Exchange:
             pair = f'{asset}{base}'
             self.client.order_limit_buy(symbol = pair, quantity = "{:.8f}".format(amt), price = "{:.8f}".format(pt))
         elif self.name == "kucoin":
-            for key in self.tickers:
-                if self.tickers[key] == asset: asset = key
+            asset = self.coins[asset]
             pair = f'{asset}-{base}'
             self.client.create_limit_order(symbol = pair, size = "{:.8f}".format(amt), price = "{:.8f}".format(pt), side = 'buy')
 
@@ -444,8 +460,7 @@ class Exchange:
             pair = f'{asset}{base}'
             self.client.order_limit_sell(symbol = pair, quantity = "{:.8f}".format(amt), price = "{:.8f}".format(pt))
         elif self.name == "kucoin":
-            for key in self.tickers:
-                if self.tickers[key] == asset: asset = key
+            asset = self.coins[asset]
             pair = f'{asset}-{base}'
             self.client.create_limit_order(symbol = pair, size = "{:.8f}".format(amt), price = "{:.8f}".format(pt), side = 'sell')
 
